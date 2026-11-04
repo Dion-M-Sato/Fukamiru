@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  --workspace: #172713;
+  --surface: #242A22;
+  --hover: #313630;
+  --raised: #3E433D;
+  --text: #D5DED3;
+  --secondary: #A3AAA1;
+  --muted-text: var(--secondary);
+  --attention: #9ED590;
+  --attention-strong: var(--attention);
+  --error: #C790D5;
+  --warning: var(--error);
+  --success: var(--attention);
+  --accent: var(--attention);
+  --shadow: #050B04;
+  --rail: var(--surface);
+  --panel-dark: var(--shadow);
+  --on-attention: var(--shadow);
+  --border: color-mix(in srgb, var(--secondary) 24%, transparent);
+  --font-ui: "Segoe UI Variable", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+  --font-editorial: Georgia, "Yu Mincho", "Hiragino Mincho ProN", serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  --activity-width: 64px;
+  --sidebar-width: clamp(232px, 18vw, 280px);
+  --inspector-width: clamp(284px, 22vw, 340px);
+  --panel-height: 128px;
+  --sidebar-track: var(--sidebar-width);
+  --inspector-track: var(--inspector-width);
+  --panel-track: var(--panel-height);
+  --status-height: 32px;
+}

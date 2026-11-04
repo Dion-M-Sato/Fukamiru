@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>原稿書き換えワークフロー</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+      --canvas: #08090a;
+      --panel: #121416;
+      --panel-high: #1a1d1f;
+      --line: #303538;
+      --text: #f4f6f5;
+      --muted: #a2aaa9;
+      --lime: #e4f222;
+      --mint: #45d6a2;
+      --cyan: #7bcfe5;
+      --amber: #f2b84b;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: linear-gradient(#ffffff09 1px, transparent 1px),
+        linear-gradient(90deg, #ffffff09 1px, transparent 1px), var(--canvas);
+      background-size: 40px 40px;
+      line-height: 1.55;
+    }
+    button { font: inherit; }
+    .shell { max-width: 1640px; margin: auto; padding: clamp(20px, 3vw, 48px); }
+    .eyebrow, .mono { font: 600 11px/1.3 ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .12em; }
+    .eyebrow { color: var(--lime); text-transform: uppercase; }
+    h1 { max-width: 960px; margin: 16px 0 14px; font-size: clamp(32px, 4vw, 62px); line-height: 1.12; letter-spacing: -.055em; }
+    h1 span { color: var(--lime); }
+    .lede { max-width: 840px; margin: 0; color: #c4cdcb; font-size: clamp(15px, 1.5vw, 18px); }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(330px, .7fr);
+      gap: 24px;
+      align-items: end;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 30px;
+    }
+    .stats { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 25px; }
+    .stat { min-width: 145px; border: 1px solid var(--line); background: #111416e8; padding: 13px 16px; }
+    .stat strong { display: block; font: 650 26px/1.1 ui-monospace, Consolas, monospace; color: var(--text); }
+    .stat span { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); }
+    .stat--accent strong { color: var(--lime); }
+    .inspector { min-height: 244px; border: 1px solid #626d57; background: linear-gradient(150deg, #222817, #111513 55%, #111416); padding: 19px 21px; }
+    .inspector-top { display: flex; justify-content: space-between; gap: 14px; color: var(--lime); }
+    .inspector h2 { margin: 22px 0 8px; font-size: 22px; line-height: 1.3; letter-spacing: -.02em; }
+    .inspector p { margin: 0; min-height: 50px; color: #d3d9d5; font-size: 14px; }
+    .inspector dl { margin: 19px 0 0; display: grid; gap: 12px; }
+    .inspector dt { color: #9da899; font-size: 11px; }
+    .inspector dd { margin: 4px 0 0; font-size: 13px; }
+    .toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: end; margin: 28px 0 16px; }
+    .toolbar h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
+    .toolbar p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+    .filters { display: flex; flex-wrap: wrap; gap: 7px; }
+    .filter { cursor: pointer; color: #cad3d0; background: #171a1c; border: 1px solid var(--line); padding: 8px 12px; font-size: 12px; }
+    .filter[aria-pressed="true"] { color: #101400; border-color: var(--lime); background: var(--lime); font-weight: 700; }
+    .filter:focus-visible, .node:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+    .map { display: grid; grid-template-columns: repeat(5, minmax(230px, 1fr)); gap: 10px; align-items: start; }
+    .stage { min-width: 0; border: 1px solid var(--line); background: #0d1011ec; }
+    .stage-head { position: relative; min-height: 94px; padding: 15px 15px 12px; background: #191d1e; border-bottom: 1px solid var(--line); }
+    .stage:not(:last-child) .stage-head::after { content: "→"; position: absolute; z-index: 2; right: -17px; top: 35px; width: 25px; text-align: center; color: var(--lime); background: var(--canvas); font: 700 22px/1 monospace; }
+    .stage-head .mono { color: var(--lime); }
+    .stage-head h3 { margin: 8px 0 0; font-size: 16px; line-height: 1.25; }
+    .stage-head small { color: var(--muted); font-size: 11px; }
+    .stack { display: grid; gap: 0; padding: 6px 11px 14px; }
+    .node { position: relative; width: 100%; cursor: pointer; text-align: left; display: block; padding: 14px 12px 13px; color: var(--text); background: transparent; border: 1px solid transparent; border-bottom-color: #ffffff19; min-height: 112px; }
+    .node::before { content: ""; position: absolute; left: -12px; top: 16px; width: 3px; height: calc(100% - 30px); background: var(--node-color, var(--line)); opacity: .9; }
+    .node:hover { background: #1d2222; border-color: #65716a; }
+    .node[aria-current="step"] { background: #202a1d; border-color: #b7d343; }
+    .node[hidden] { display: none; }
+    .node-top { display: flex; justify-content: space-between; gap: 7px; align-items: baseline; }
+    .node-index { color: var(--node-color, var(--muted)); }
+    .node-status { color: var(--node-color, var(--muted)); font-size: 10px; white-space: nowrap; }
+    .node-title { display: block; margin: 8px 0 5px; font-size: 14px; font-weight: 700; line-height: 1.3; }
+    .node-description { display: block; color: #abb5b3; font-size: 11px; line-height: 1.4; }
+    .node-code { display: block; margin-top: 9px; color: #7f8b89; font: 600 10px/1.2 ui-monospace, Consolas, monospace; }
+    .node--parallel { --node-color: var(--lime); }
+    .node--bounded { --node-color: var(--mint); }
+    .node--guard { --node-color: var(--amber); }
+    .node--conditional { --node-color: #bd9eff; }
+    .node--serial { --node-color: var(--cyan); }
+    .map-note { margin: 16px 0 0; color: var(--muted); font-size: 12px; }
+    .terminal { margin-top: 30px; border: 1px solid #585f39; background: #191d15; padding: 21px 24px; }
+    .terminal h2 { margin: 0 0 11px; font-size: 18px; }
+    .terminal p { margin: 0; color: #c7d0c3; font-size: 13px; }
+    .terminal code { color: var(--lime); font: 600 12px/1.8 ui-monospace, Consolas, monospace; white-space: normal; }
+    footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--line); color: #8f9995; font-size: 11px; }
+    body.modal-open { overflow: hidden; }
+    .modal-layer { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: #030605dc; }
+    .modal-layer[hidden] { display: none; }
+    .modal-panel { width: min(960px, 100%); max-height: min(90vh, 920px); overflow: auto; border: 1px solid #697560; background: #121617; box-shadow: 0 24px 70px #000a; }
+    .modal-topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 22px; border-bottom: 1px solid var(--line); color: var(--lime); }
+    .modal-close { cursor: pointer; color: var(--text); background: #202628; border: 1px solid #6a7971; padding: 8px 14px; }
+    .modal-close:hover { background: #303a38; }
+    .modal-close:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+    .modal-body { padding: clamp(20px, 3vw, 34px); }
+    .modal-kicker { color: var(--lime); }
+    .modal-heading { display: flex; justify-content: space-between; align-items: start; gap: 20px; }
+    .modal-heading h2 { margin: 8px 0 10px; font-size: clamp(24px, 3vw, 36px); line-height: 1.25; letter-spacing: -.035em; }
+    .modal-heading p { margin: 0; max-width: 700px; color: #d4dcda; font-size: 15px; }
+    .modal-status { flex: none; margin-top: 4px; padding: 6px 10px; border: 1px solid var(--line); color: var(--lime); font-size: 12px; }
+    .modal-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 24px 0; }
+    .modal-facts > div { min-width: 0; border: 1px solid var(--line); background: #1a1f20; padding: 14px 16px; }
+    .modal-facts dt { color: var(--lime); font-size: 11px; font-weight: 700; }
+    .modal-facts dd { margin: 7px 0 0; color: #d5ddda; font-size: 13px; line-height: 1.65; }
+    .modal-flow { border: 1px solid #4b5a50; background: #0c1111; padding: 18px; }
+    .modal-flow h3 { margin: 0 0 5px; font-size: 17px; }
+    .modal-flow > p { margin: 0 0 18px; color: var(--muted); font-size: 12px; }
+    .inner-flow { margin: 0; padding: 0; list-style: none; }
+    .inner-flow--serial { display: flex; align-items: stretch; gap: 22px; }
+    .flow-unit { position: relative; display: grid; place-items: center; min-width: 0; min-height: 60px; padding: 10px; border: 1px solid #56635e; background: #202929; color: var(--text); text-align: center; font-size: 12px; font-weight: 650; line-height: 1.4; }
+    .inner-flow--serial .flow-unit { flex: 1; }
+    .inner-flow--serial .flow-unit:not(:last-child)::after { content: "→"; position: absolute; top: 50%; right: -20px; transform: translateY(-50%); color: var(--lime); font-size: 16px; }
+    .inner-flow--parallel { display: grid; justify-items: center; gap: 16px; }
+    .inner-flow--parallel > .flow-unit { width: min(260px, 100%); }
+    .flow-branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); width: 100%; gap: 8px; padding: 16px 0; border-top: 1px solid #75857a; border-bottom: 1px solid #75857a; }
+    .flow-branches .flow-unit { border-color: var(--lime); background: #2b351d; }
+    .inner-flow--parallel > .flow-unit:first-child::after, .inner-flow--parallel > .flow-unit:last-child::before { content: "↓"; position: absolute; left: 50%; color: var(--lime); font-size: 16px; }
+    .inner-flow--parallel > .flow-unit:first-child::after { bottom: -23px; }
+    .inner-flow--parallel > .flow-unit:last-child::before { top: -23px; }
+    .modal-meta { margin: 13px 0 0; color: var(--muted); font-size: 11px; }
+    @media (max-width: 1180px) { .map { grid-template-columns: repeat(3, minmax(230px, 1fr)); } .stage-head::after { display: none; } }
+    @media (max-width: 780px) { .hero { grid-template-columns: 1fr; } .map { grid-template-columns: repeat(2, minmax(220px, 1fr)); } }
+    @media (max-width: 520px) { .shell { padding: 20px 14px; } .map { grid-template-columns: 1fr; } .node { min-height: 0; } .inspector { min-height: 0; } .modal-layer { padding: 8px; } .modal-panel { max-height: 96vh; } .modal-facts { grid-template-columns: 1fr; } .modal-heading { display: block; } .modal-status { display: inline-block; margin-top: 12px; } .inner-flow--serial { flex-direction: column; gap: 22px; } .inner-flow--serial .flow-unit:not(:last-child)::after { content: "↓"; top: auto; bottom: -23px; right: 50%; transform: translateX(50%); } }
+    @media (prefers-reduced-motion: no-preference) { .node, .filter { transition: background-color .16s ease, border-color .16s ease; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">FUKAMIRU / WORKFLOW INTELLIGENCE</div>
+        <h1>原稿書き換えワークフロー <span>V29</span>グラフ</h1>
+        <p class="lede">29ノードの実行順序と処理方式を確認できます。ノードをクリックすると、工程内の流れ、並列対象、順序を守る処理を表示します。</p>
+        <div class="stats" id="stats"></div>
+      </div>
+      <aside class="inspector" aria-live="polite" aria-label="選択した工程の詳細">
+        <div class="inspector-top"><span class="mono">SELECTED NODE</span><span class="mono" id="detail-index">01 / 29</span></div>
+        <h2 id="detail-title"></h2>
+        <p id="detail-description"></p>
+        <dl>
+          <div><dt>実行方式</dt><dd id="detail-status"></dd></div>
+        </dl>
+      </aside>
+    </header>
+
+    <div class="toolbar">
+      <div><h2>工程と依存順序</h2><p id="filter-summary">左から右へ進み、各列は上から下へ実行されます。</p></div>
+      <div class="filters" role="group" aria-label="工程の表示フィルター">
+        <button class="filter" type="button" data-filter="all" aria-pressed="true">すべて</button>
+        <button class="filter" type="button" data-filter="parallel" aria-pressed="false">内部並列</button>
+        <button class="filter" type="button" data-filter="bounded" aria-pressed="false">分割・逐次検証</button>
+        <button class="filter" type="button" data-filter="conditional" aria-pressed="false">条件付き</button>
+        <button class="filter" type="button" data-filter="serial" aria-pressed="false">内部直列</button>
+        <button class="filter" type="button" data-filter="guard" aria-pressed="false">必須の検証・固定</button>
+      </div>
+    </div>
+    <main class="map" id="map" aria-label="V29ワークフロー全29工程"></main>
+    <p class="map-note">色とフィルターは工程内の実行方式を示します。主な実行先と、必要に応じて呼び出すサービスはノード詳細で確認できます。</p>
+    <section class="terminal" aria-label="V29の最終判定経路">
+      <h2>終盤は修復後に固定し、固定後は読み取り専用</h2>
+      <p><code>表層品質 → 書誌描画 → 書誌品質 → 構造検査 → 意味修復 → SHA-256固定 → 談話検証 → 指摘再監査 → 最終判定 → Proposal保存</code></p>
+    </section>
+    <footer><span>V24・V25の既存Runとワークフロー定義は変更しません。</span><span id="source-note"></span></footer>
+  </div>
+  <div class="modal-layer" id="node-modal" hidden>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-describedby="modal-role">
+      <div class="modal-topbar"><span class="mono" id="modal-id"></span><button class="modal-close" id="modal-close" type="button">閉じる</button></div>
+      <div class="modal-body">
+        <div class="modal-heading"><div><span class="modal-kicker mono" id="modal-order"></span><h2 id="modal-title"></h2><p id="modal-role"></p></div><span class="modal-status" id="modal-status"></span></div>
+        <dl class="modal-facts">
+          <div><dt>処理の分け方</dt><dd id="modal-target"></dd></div>
+          <div><dt>順序を守る処理</dt><dd id="modal-boundary"></dd></div>
+          <div><dt>品質を守る条件</dt><dd id="modal-safety"></dd></div>
+          <div><dt>主な実行先</dt><dd id="modal-lane"></dd></div>
+        </dl>
+        <section class="modal-flow" aria-labelledby="modal-flow-title"><h3 id="modal-flow-title">ノード内処理</h3><p id="modal-flow-note"></p><div id="modal-flow"></div></section>
+        <p class="modal-meta">分岐図は作業単位を示します。同時実行数は実行時の上限と空き枠で変わります。</p>
+      </div>
+    </section>
+  </div>
+  <script id="workflow-data" type="application/json">{"schema_version":3,"diagram_type":"workflow","meta":{"title":"原稿書き換えワークフロー","workflowVersion":"29","source":"fukamiru.workflow.templates.manuscript_rewrite_workflow_v29","parallel_node_count":13,"note":"15〜20はV29の全文日本語推敲工程です。llm-jp Instructが3候補を作り、機械保護とLuna警告を経てshadow previewを公開します。V28以前の既存Runは変更しません。"},"stages":[{"id":"context","label":"01 / 資料と根拠","count":8},{"id":"argument","label":"02 / 論証と草稿","count":6},{"id":"japanese","label":"03 / 日本語推敲","count":6},{"id":"render","label":"04 / 書誌描画と修復","count":4},{"id":"freeze","label":"05 / 固定と判定","count":5}],"mainPath":["prepare_rewrite_context","extract_manuscript_references","review_manuscript_reasoning","plan_manuscript_structure","plan_research_queries","resolve_manuscript_evidence","validate_evidence_support","resolve_reference_metadata","resolve_enumeration_context","plan_term_introductions","plan_semantic_paragraphs","draft_rewrite","calibrate_manuscript_certainty","validate_rewrite_coherence","extract_proofreading_sentences","generate_proofreading_candidates","preprocess_proofreading_candidates","screen_proofreading_with_luna","select_proofreading_candidates","publish_proofreading_shadow","render_manuscript_references","validate_reference_quality","validate_rendered_structure","repair_final_coherence","freeze_final_candidate","validate_discourse_introductions","audit_final_findings","validate_final_coherence","persist_rewrite_proposal"],"nodes":[{"order":1,"id":"prepare_rewrite_context","label":"書換え準備","stage":"context","resource_lane":"ingestion_cpu","status":"serial","description":"対象Revision・保護範囲を確定","role":"入力原稿と指示を固定し、すべての後続ノードが共有する書き換えコンテキストを作ります。","target":"内部並列なし。対象Revision、指示、保護範囲をひとつの入力として確定します。","boundary":"版確認、構造スナップショット、入力ハッシュの確定。","safety":"後続の全工程が同じ原稿スナップショットと保護範囲を参照します。","steps":["入力検証","文書読込","構造マップ","コンテキスト"],"before":null,"branches":null,"after":null},{"order":2,"id":"extract_manuscript_references","label":"文献抽出","stage":"context","resource_lane":"ingestion_cpu","status":"serial","description":"原稿内の文献候補を抽出","role":"原稿中の参考文献候補を抽出し、後続の識別・整形で使える構造化レコードに変換します。","target":"内部並列なし。原稿中の文献候補を出現順に扱います。","boundary":"文献順、番号、全体的な表記規則の認識。","safety":"文献番号と原稿中の順序を保ったまま候補を構造化します。","steps":["文献領域検出","候補抽出","規則判定","順序確定"],"before":null,"branches":null,"after":null},{"order":3,"id":"review_manuscript_reasoning","label":"論理レビュー","stage":"context","resource_lane":"codex_remote","status":"parallel","description":"論証を単位別にレビュー","role":"原稿ブロックを論理面からレビューし、論証上の問題、追加調査候補、構造計画への入力を作ります。","target":"原稿ブロックを複数のレビュー単位に分け、Codexによる論理レビューを並列に実行します。","boundary":"返却検証、クエリ割当、ID採番、進捗記録、レビュー保存。","safety":"返却ブロックIDを当該バッチ内へ制限し、親スレッドがバッチ番号順に検証・統合します。","steps":null,"before":"原稿を分割","branches":["論理レビュー1","論理レビュー2","論理レビュー3"],"after":"返却検証・順序統合"},{"order":4,"id":"plan_manuscript_structure","label":"構造計画","stage":"context","resource_lane":"codex_remote","status":"serial","description":"骨格・論証・年代・談話を計画","role":"文書の骨格、論証関係、時制、談話接続を段階的に設計し、後続の書き換え方針を固定します。","target":"内部の順序を維持。骨格を定めてから論証・時制・談話の計画へ進みます。","boundary":"骨格確定、各計画の統合、全体検証、必要時の骨格修復。","safety":"後段の計画には同じ確定済み骨格を渡し、全体の整合性を確認します。","steps":["骨格を計画","論証・時制・談話","順序統合","全体検証"],"before":null,"branches":null,"after":null},{"order":5,"id":"plan_research_queries","label":"検索課題と検索文の整理","stage":"context","resource_lane":"ingestion_cpu","status":"parallel","description":"ローカルで検索課題を整理し必要時のみ推論","role":"調査義務を検証可能な下位主張へ分け、ローカルで検索課題と検索文を整理します。曖昧な場合だけ推論を使います。","target":"独立した調査義務ごとの整理。必要な推論だけを並列の作業単位へ送ります。","boundary":"初期計画、返却形式の検証、元の調査義務順での統合と記録。","safety":"推論結果が不正なら規則に基づく初期計画へ戻し、原稿順を保って適用します。","steps":null,"before":"調査義務を整理","branches":["検索課題1","検索課題2","検索課題3","検索課題4"],"after":"契約検証・順序統合"},{"order":6,"id":"resolve_manuscript_evidence","label":"証拠解決","stage":"context","resource_lane":"ingestion_cpu","status":"parallel","description":"根拠資料を並列検索","role":"論理レビューが要求した根拠を、ローカル知識、OpenAlex、Crossrefから検索し、候補を順位付けします。","target":"独立した証拠検索課題を検索プールへ投入し、外部検索を上限内で並列に行います。","boundary":"共有埋め込み・FAISS検索、各クエリ内の短絡評価、採用結果の保存と集約。","safety":"共有モデルとFAISSをロックし、ワーカーごとにDB接続を分離、親スレッドだけが証拠を保存します。","steps":null,"before":"検索課題を配布","branches":["根拠検索1","根拠検索2","根拠検索3","根拠検索4","根拠検索5"],"after":"順位付け・順序保存"},{"order":7,"id":"validate_evidence_support","label":"主張の根拠・推論を検証","stage":"context","resource_lane":"codex_remote","status":"parallel","description":"主張と根拠の支持関係を監査","role":"下位主張とその統合関係が実際の引用箇所に支えられているかを検証し、推論による橋渡しを明示します。","target":"調査義務ごとに下位主張と候補資料の支持関係を独立に監査します。","boundary":"候補資料の選別、返却契約と引用照合、義務順の集約、採用証拠の保存。","safety":"引用は候補キーと抜粋の一致を必須にし、親スレッドが決定論的に統合してから証拠を保存します。","steps":null,"before":"主張と資料を配布","branches":["支持監査1","支持監査2","支持監査3","支持監査4","支持監査5"],"after":"引用照合・順序保存"},{"order":8,"id":"resolve_reference_metadata","label":"文献メタデータ","stage":"context","resource_lane":"codex_remote","status":"parallel","description":"書誌候補と来歴を照合","role":"抽出した文献の実体を外部カタログで特定し、不足フィールドをCodex推論で補完します。","target":"文献候補のNDL/OpenAlex/Crossref照合と不足フィールド推論。検索は最大5枠。","boundary":"各文献内のプロバイダ順、識別から推論へのフェーズ境界、元順序への推論適用。","safety":"NDLの既存レート制限を維持し、識別完了後に推論を開始、適用は親スレッドで元順に行います。","steps":null,"before":"文献候補を配布","branches":["書誌照合1","書誌照合2","書誌照合3","書誌照合4","書誌照合5"],"after":"不足補完・順序適用"},{"order":9,"id":"resolve_enumeration_context","label":"列挙文脈解決","stage":"argument","resource_lane":"codex_remote","status":"parallel","description":"列挙候補をバッチ評価","role":"「第一に」「A、B、C」などの列挙表現について、項目の境界、係り先、文脈上の役割を決定します。","target":"同じ文・ブロックの列挙候補をひとつの単位にまとめ、独立単位を並列評価します。","boundary":"候補抽出、欠落契約の安全側フォールバック、ID検証、候補順マージ、進捗記録。","safety":"同じ文・同じブロックを同一バッチに置き、モデル結果は親スレッドが候補順に統合します。","steps":null,"before":"列挙候補を分割","branches":["文脈評価1","文脈評価2","文脈評価3","文脈評価4","文脈評価5"],"after":"ID検証・候補順統合"},{"order":10,"id":"plan_term_introductions","label":"初出語・引用の談話計画","stage":"argument","resource_lane":"codex_remote","status":"parallel","description":"初出語と引用目的を計画","role":"初出語が必要になる理由と、引用が論証のどの役割を担うかを意味段落の設計前に計画します。","target":"ブロックを小さな単位に分け、初出語の説明と引用目的を並列に計画します。","boundary":"全ブロックの初出情報、前後2ブロックの文脈、返却契約、チェックポイント保存、入力順マージ。","safety":"ワーカーは原稿を変更せず、バッチごとに別DB接続を使い、親スレッドがバッチ番号順に保存・統合します。","steps":null,"before":"ブロックを分割","branches":["談話計画1","談話計画2","談話計画3","談話計画4","談話計画5"],"after":"契約検証・原稿順統合"},{"order":11,"id":"plan_semantic_paragraphs","label":"意味段落計画","stage":"argument","resource_lane":"codex_remote","status":"parallel","description":"意味段落と境界を計画","role":"論旨と談話関係を保ったまま、最終原稿の意味段落境界と段落ごとの役割を計画します。","target":"談話上つながる範囲を壊さず複数の計画単位へ分け、並列に注釈します。","boundary":"各バッチ検証、安全側フォールバック、全体構成、境界ロック、循環検出。","safety":"談話スパンや隣接連鎖の内部を分割せず、検証と全体計画の合成は親スレッドで固定順に行います。","steps":null,"before":"談話スパン分割","branches":["段落計画1","段落計画2","段落計画3","段落計画4"],"after":"全体構成・境界検証"},{"order":12,"id":"draft_rewrite","label":"書換えドラフト","stage":"argument","resource_lane":"codex_remote","status":"parallel","description":"節単位の草稿を生成・統合","role":"構造計画と段落計画に基づき、原稿の各セクションを実際に書き換えます。","target":"編集が衝突しない節・ブロックのドラフトを複数のCodex作業単位で生成します。","boundary":"編集競合の検出、固定順適用、canonical HTMLと保護領域の検証。","safety":"共有Codex上限と競合用予約枠を維持し、書き換え結果の適用だけは親スレッドで直列にします。","steps":null,"before":"節単位に分割","branches":["草稿生成1","草稿生成2","草稿生成3","草稿生成4","草稿生成5"],"after":"順序適用・HTML検証"},{"order":13,"id":"calibrate_manuscript_certainty","label":"根拠の確実度・断定表現の調整","stage":"argument","resource_lane":"codex_remote","status":"parallel","description":"断定と確実性を調整","role":"根拠の強さに合わせて、確立事項、暫定的解釈、要追加根拠、反証ありを区別し、断定表現を調整します。","target":"書換え後の文を小さな監査単位に分け、断定の強さを並列に評価します。","boundary":"文位置の固定、判定の統合、推量表現への置換、未解決課題、canonical HTML更新。","safety":"監査中は原稿を変更せず、親スレッドが後方の文から編集を適用し、オフセット衝突を防ぎます。","steps":null,"before":"文を監査単位へ","branches":["確実度評価1","確実度評価2","確実度評価3","確実度評価4","確実度評価5"],"after":"衝突を避けて反映"},{"order":14,"id":"validate_rewrite_coherence","label":"書換え一貫性","stage":"argument","resource_lane":"codex_remote","status":"bounded","description":"節切片で推敲前検証・安全な局所修復","role":"推敲前の原稿を節内の連続した切片に分け、論理・根拠・段落間の整合性を検証します。安全な局所修復後に変更箇所を再検証します。","target":"切片単位に分けて検証します。各巡の結果は順に確認し、修復を次の巡へ渡します。","boundary":"各切片の契約確認、原稿全体の関係監査、修復適用、再検証。","safety":"修復結果を検証せずに次工程へ渡さず、無効なHTMLや応答契約違反では停止します。","steps":["節を切片に分割","切片と全体を検証","局所修復","変更箇所を再検証"],"before":null,"branches":null,"after":null},{"order":15,"id":"extract_proofreading_sentences","label":"文抽出と作品名登録","stage":"japanese","resource_lane":"ingestion_cpu","status":"serial","description":"本文の対象文と保護すべき書誌的作品名を登録","role":"ノード14の原稿から推敲対象文と保護すべき作品名を抽出します。","target":"見出し・参考文献のみ・引用のみ・空文を除外し、本文の対象文をすべて記録します。","boundary":"安定したsource_sentence_id、本文オフセット、原文ハッシュ、作品名レジストリを固定します。","safety":"原文の保護範囲と正本HTMLを変更しません。","steps":["対象ブロックを走査","文と原文位置を確定","作品名を登録","原文ハッシュを保存"],"before":null,"branches":null,"after":null},{"order":16,"id":"generate_proofreading_candidates","label":"全文推敲候補生成","stage":"japanese","resource_lane":"local_llm_gpu","status":"serial","description":"llm-jp Instructで各文の全文候補を3件生成","role":"llm-jp Instructで各対象文に対して全文推敲候補を3件生成します。","target":"局所語句に限定せず、原文全体の自然な書換えを候補として記録します。","boundary":"温度0.4、top_p0.9、top_k40、seed、モデルとprompt版を記録します。","safety":"候補生成だけを行い、採用や本文反映はこの工程で行いません。","steps":["原文をモデルへ入力","3候補を生成","生候補と来歴を保存"],"before":null,"branches":null,"after":null},{"order":17,"id":"preprocess_proofreading_candidates","label":"機械保護と文字差分","stage":"japanese","resource_lane":"ingestion_cpu","status":"guard","description":"候補の正規化・重複除去・数値等の保護・lint・文字差分","role":"候補を正規化・重複除去し、構造化ポリシー、数値、帰属、作品名、機械lintを検査します。","target":"全候補にraw character diffを作成し、Lunaへ送る対象を限定します。","boundary":"hard_reject、manual_check、lint_flag、luna_pendingを独立記録します。","safety":"意味変更やモダリティ変更そのものを自動で危険扱いしません。","steps":["候補正規化","重複除去","機械保護とlint","文字単位diff"],"before":null,"branches":null,"after":null},{"order":18,"id":"screen_proofreading_with_luna","label":"Luna警告判定","stage":"japanese","resource_lane":"codex_remote","status":"parallel","description":"GPT-5.6 Lunaで語形・統語事故のみ警告判定","role":"GPT-5.6 Lunaが語形・統語の生成事故をwarning判定します。","target":"機械検査を通過した候補のみを、10件単位・最大8並列で判定します。","boundary":"prompt hashと判定結果をpersistent cacheし、欠損はluna_unavailableにします。","safety":"Lunaを意味保存判定や候補順位付けには用いません。","steps":["cacheを照会","Lunaへ警告判定","IDとschemaを照合","結果を保存"],"before":null,"branches":null,"after":null},{"order":19,"id":"select_proofreading_candidates","label":"推敲候補選択","stage":"japanese","resource_lane":"ingestion_cpu","status":"serial","description":"安全判定と独立して候補を選択","role":"安全判定と独立して、候補から選択対象を決めます。","target":"clean候補を適用可能とし、明示選択または唯一clean候補の任意自動選択を扱います。","boundary":"選択結果と方式を候補ごとに監査記録します。","safety":"cleanを最良候補とみなさず、Base尤度やLunaで自動順位付けしません。","steps":["clean候補を列挙","選択指定を検証","選択と待機を記録"],"before":null,"branches":null,"after":null},{"order":20,"id":"publish_proofreading_shadow","label":"推敲プレビュー公開","stage":"japanese","resource_lane":"ingestion_cpu","status":"guard","description":"原稿を書き換えず適用結果をプレビュー","role":"原稿を変えずに、clean候補を選んだ場合の結果をpreviewとして公開します。","target":"候補状態、判定理由、選択状態、previewをRun単位で提示します。","boundary":"原文ハッシュ、位置、競合を再確認し、auto_applied_countを0に固定します。","safety":"正本HTMLを維持したまま後続ノードへ渡します。","steps":["原文との整合性を確認","候補previewを作成","shadow結果を記録","後続検証へ渡す"],"before":null,"branches":null,"after":null},{"order":21,"id":"render_manuscript_references","label":"参考文献整形","stage":"render","resource_lane":"ingestion_cpu","status":"serial","description":"引用版の言語と資料種別に応じた利用者指定書式で、正規文献と未確認候補を同一終端節に描画","role":"書誌メタデータを引用版の言語・資料種別に応じた利用者指定書式へ整形し、原稿HTMLへ組み込みます。","target":"内部並列なし。和文句読点、仏英論文の引用符、外国語書名・誌名の斜体を適用し、文献順と未確認候補を保ちます。","boundary":"対象版の言語、資料種別、書誌フィールド、HTML組立、表層・境界検査。","safety":"書式未確定の言語・資料種別は共通項目を残して要確認とし、再描画の冪等性を検査します。","steps":["メタデータ読込","言語・資料種別判定","利用者指定書式へ整形","HTML組立と冪等性確認"],"before":null,"branches":null,"after":null},{"order":22,"id":"validate_reference_quality","label":"文献品質検証","stage":"render","resource_lane":"ingestion_cpu","status":"guard","description":"書誌メタデータの品質を判定","role":"参考文献の必須フィールド、出典、重複、順序、レンダリング冪等性を検査します。","target":"内部並列なし。必須項目、出典、重複、順序、描画結果を文献集合全体で判定します。","boundary":"重複、順序、全体完全性、冪等性の統合判定。","safety":"局所検査を分けても、最終判定は文献集合全体に対して1回だけ行います。","steps":["項目検査","出典確認","重複・順序","冪等性"],"before":null,"branches":null,"after":null},{"order":23,"id":"validate_rendered_structure","label":"描画後の正本構造検証","stage":"render","resource_lane":"ingestion_cpu","status":"guard","description":"描画後HTMLの終端・ID・ロックを決定的検査","role":"参考文献を描画した後の正本HTMLについて、終端節、ブロックID、保護領域、段落境界を検査します。","target":"内部並列なし。描画後のHTML全体を規則に沿って検査します。","boundary":"参考文献節の位置と数、ID、保護ブロック、境界ロックの整合性。","safety":"描画に起因する構造違反は意味推論で修復せず、この工程で停止します。","steps":["描画後HTMLを取得","構造とIDを検査","保護境界を照合","結果を記録"]},{"order":24,"id":"repair_final_coherence","label":"最終原稿の局所修復","stage":"render","resource_lane":"codex_remote","status":"bounded","description":"変更節・隣接節・依存先を最大3巡で再検証","role":"書誌描画後の原稿を節と連続した切片に分け、意味上の不整合を監査して安全な箇所だけ局所修復します。","target":"節・切片単位で検証し、変更節と隣接節、依存先を最大3巡で再確認します。","boundary":"全体関係の監査、修復の適用、変更箇所の再検証、巡ごとの候補保存。","safety":"最後の編集後に検証されていないHTMLは固定工程へ渡しません。","steps":["節を切片に分割","意味関係を検証","安全な局所修復","変更箇所を再検証"]},{"order":25,"id":"freeze_final_candidate","label":"最終候補を固定","stage":"freeze","resource_lane":"ingestion_cpu","status":"guard","description":"表層・構造を再確認しHTMLとSHA-256を固定","role":"修復済みの最終候補を、表層・構造・文献品質の整合性を確認したうえでSHA-256ハッシュとともに固定します。","target":"内部並列なし。ひとつの正本HTMLを固定します。","boundary":"表層品質、保護領域、描画後構造、意味検証ハッシュ、文献品質の照合。","safety":"どれかが現在のHTMLと一致しなければ固定せず停止します。後続は同じHTMLを読み取り専用で扱います。","steps":["表層と構造を確認","検証ハッシュを照合","文献品質を確認","SHA-256で固定"]},{"order":26,"id":"validate_discourse_introductions","label":"初出語・引用目的の最終検証","stage":"freeze","resource_lane":"codex_remote","status":"parallel","description":"固定HTMLの初出語と引用目的を読取専用検証","role":"固定済みHTMLを変更せず、初出語の説明と引用の論証上の目的が本文に反映されたかを検証します。","target":"固定HTMLのブロックを小さな単位に分け、Codexで読み取り専用の評価を並列に行います。","boundary":"HTMLハッシュの確認、返却契約、未解決項目の集約、入力順統合。","safety":"各結果に固定HTMLのハッシュを付け、検証中に原稿を変更しません。","steps":null,"before":"固定HTMLを分割","branches":["談話検証1","談話検証2","談話検証3","談話検証4","談話検証5"],"after":"未解決項目を統合"},{"order":27,"id":"audit_final_findings","label":"重大指摘の最終再監査","stage":"freeze","resource_lane":"codex_remote","status":"parallel","description":"重大指摘・未解決質問を対象別に再監査","role":"重大・致命的な指摘、未解決質問、断定表現の変更を固定HTMLに照らして再監査します。","target":"指摘や質問を対象ごとに分け、関連する本文・根拠だけを付けた読み取り専用監査を並列に実行します。","boundary":"対象ID、返却契約、全対象の完了確認、固定HTMLハッシュの照合。","safety":"各結果が同じ固定HTMLを参照しているか確認し、原稿を変更しません。","steps":null,"before":"指摘・質問を分割","branches":["指摘監査1","指摘監査2","指摘監査3"],"after":"全件・ハッシュ照合"},{"order":28,"id":"validate_final_coherence","label":"最終一貫性","stage":"freeze","resource_lane":"ingestion_cpu","status":"guard","description":"同じHTMLハッシュ上の品質証拠を集約","role":"固定したHTMLと同じハッシュ上に、構造・意味・文献・表層・談話・重大指摘の検証結果が揃っているかを最終判定します。","target":"内部並列なし。すでに得た検証結果をひとつの候補について集約します。","boundary":"HTMLハッシュ、全ブロックの検証範囲、未解決事項、品質状態、完了可否。","safety":"検証結果が欠けるか別のHTMLを対象とする場合は停止し、未解決事項は人間確認が必要な状態として残します。","steps":["固定ハッシュを確認","検証結果を照合","品質状態を判定","完了結果を確定"],"before":null,"branches":null,"after":null},{"order":29,"id":"persist_rewrite_proposal","label":"提案を保存","stage":"freeze","resource_lane":"ingestion_cpu","status":"serial","description":"判定済みの固定候補をProposalへ保存","role":"最終判定済みの固定候補を、品質状態と未解決事項を添えた全体確認用Proposalとして保存します。","target":"内部並列なし。ひとつの固定HTMLを単一の保存処理で扱います。","boundary":"固定ハッシュと最終判定の照合、HTML妥当性、既存提案との重複確認、保存。","safety":"判定対象と保存対象のハッシュが同じことを確認し、単一ライターで冪等性を守ります。","steps":["判定証明を照合","HTMLを検証","提案を保存","完了イベント"],"before":null,"branches":null,"after":null}],"edges":[{"from":"prepare_rewrite_context","to":"extract_manuscript_references"},{"from":"extract_manuscript_references","to":"review_manuscript_reasoning"},{"from":"review_manuscript_reasoning","to":"plan_manuscript_structure"},{"from":"plan_manuscript_structure","to":"plan_research_queries"},{"from":"plan_research_queries","to":"resolve_manuscript_evidence"},{"from":"resolve_manuscript_evidence","to":"validate_evidence_support"},{"from":"validate_evidence_support","to":"resolve_reference_metadata"},{"from":"resolve_reference_metadata","to":"resolve_enumeration_context"},{"from":"resolve_enumeration_context","to":"plan_term_introductions"},{"from":"plan_term_introductions","to":"plan_semantic_paragraphs"},{"from":"plan_semantic_paragraphs","to":"draft_rewrite"},{"from":"draft_rewrite","to":"calibrate_manuscript_certainty"},{"from":"calibrate_manuscript_certainty","to":"validate_rewrite_coherence"},{"from":"validate_rewrite_coherence","to":"extract_proofreading_sentences"},{"from":"extract_proofreading_sentences","to":"generate_proofreading_candidates"},{"from":"generate_proofreading_candidates","to":"preprocess_proofreading_candidates"},{"from":"preprocess_proofreading_candidates","to":"screen_proofreading_with_luna"},{"from":"screen_proofreading_with_luna","to":"select_proofreading_candidates"},{"from":"select_proofreading_candidates","to":"publish_proofreading_shadow"},{"from":"publish_proofreading_shadow","to":"render_manuscript_references"},{"from":"render_manuscript_references","to":"validate_reference_quality"},{"from":"validate_reference_quality","to":"validate_rendered_structure"},{"from":"validate_rendered_structure","to":"repair_final_coherence"},{"from":"repair_final_coherence","to":"freeze_final_candidate"},{"from":"freeze_final_candidate","to":"validate_discourse_introductions"},{"from":"validate_discourse_introductions","to":"audit_final_findings"},{"from":"audit_final_findings","to":"validate_final_coherence"},{"from":"validate_final_coherence","to":"persist_rewrite_proposal"}]}</script>
+  <script>
+    const workflow = JSON.parse(document.getElementById("workflow-data").textContent);
+    const laneNames = { ingestion_cpu: "主にローカル", codex_remote: "Codex中心", local_llm_gpu: "ローカルLLM", embedding_gpu: "埋め込みモデル" };
+    const statusNames = { parallel: "内部並列", bounded: "分割・逐次検証", guard: "必須の検証・固定", conditional: "条件付き", serial: "内部直列" };
+    const map = document.getElementById("map");
+    const cards = new Map();
+    const modal = document.getElementById("node-modal");
+    const closeButton = document.getElementById("modal-close");
+    let returnFocus = null;
+    let selected = workflow.nodes[0];
+    const element = (tag, className, text) => {
+      const item = document.createElement(tag);
+      if (className) item.className = className;
+      if (text !== undefined) item.textContent = text;
+      return item;
+    };
+    function select(node) {
+      selected = node;
+      for (const [id, card] of cards) card.setAttribute("aria-current", id === node.id ? "step" : "false");
+      document.getElementById("detail-index").textContent = `${String(node.order).padStart(2, "0")} / 29`;
+      document.getElementById("detail-title").textContent = node.label;
+      document.getElementById("detail-description").textContent = node.description;
+      document.getElementById("detail-status").textContent = statusNames[node.status] || node.status;
+    }
+    function renderInnerFlow(node) {
+      const host = document.getElementById("modal-flow");
+      host.replaceChildren();
+      if (Array.isArray(node.branches) && node.branches.length) {
+        const flow = element("div", "inner-flow inner-flow--parallel");
+        const branches = element("div", "flow-branches");
+        for (const branch of node.branches) branches.append(element("div", "flow-unit", branch));
+        flow.append(element("div", "flow-unit", node.before), branches, element("div", "flow-unit", node.after));
+        host.append(flow);
+        document.getElementById("modal-flow-note").textContent = "入力を独立した作業単位に分け、結果を順序どおりに統合します。";
+      } else {
+        const flow = element("ol", "inner-flow inner-flow--serial");
+        for (const step of node.steps) flow.append(element("li", "flow-unit", step));
+        host.append(flow);
+        document.getElementById("modal-flow-note").textContent = "工程内の処理順です。";
+      }
+    }
+    function openDetail(node, source) {
+      returnFocus = source;
+      document.getElementById("modal-id").textContent = node.id;
+      document.getElementById("modal-order").textContent = `工程 ${String(node.order).padStart(2, "0")} / ${workflow.nodes.length}`;
+      document.getElementById("modal-title").textContent = node.label;
+      document.getElementById("modal-role").textContent = node.role;
+      document.getElementById("modal-status").textContent = statusNames[node.status];
+      document.getElementById("modal-target").textContent = node.target;
+      document.getElementById("modal-boundary").textContent = node.boundary;
+      document.getElementById("modal-safety").textContent = node.safety;
+      document.getElementById("modal-lane").textContent = laneNames[node.resource_lane];
+      renderInnerFlow(node);
+      modal.hidden = false;
+      document.body.classList.add("modal-open");
+      closeButton.focus();
+    }
+    function closeDetail() {
+      if (modal.hidden) return;
+      modal.hidden = true;
+      document.body.classList.remove("modal-open");
+      if (returnFocus) returnFocus.focus();
+    }
+    closeButton.addEventListener("click", closeDetail);
+    modal.addEventListener("click", (event) => { if (event.target === modal) closeDetail(); });
+    document.addEventListener("keydown", (event) => {
+      if (modal.hidden) return;
+      if (event.key === "Escape") { event.preventDefault(); closeDetail(); }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        closeButton.focus();
+      }
+    });
+    for (const stage of workflow.stages) {
+      const panel = element("section", "stage");
+      panel.setAttribute("aria-label", stage.label);
+      const head = element("div", "stage-head");
+      head.append(element("span", "mono", stage.label.split(" / ")[0]));
+      head.append(element("h3", "", stage.label.split(" / ")[1]));
+      head.append(element("small", "", `${stage.count}工程`));
+      panel.append(head);
+      const stack = element("div", "stack");
+      for (const node of workflow.nodes.filter((item) => item.stage === stage.id)) {
+        const card = element("button", `node node--${node.status}`);
+        card.type = "button";
+        card.dataset.nodeId = node.id;
+        card.setAttribute("aria-haspopup", "dialog");
+        card.setAttribute("aria-controls", "node-modal");
+        card.setAttribute("aria-label", `${node.order}。${node.label}。${statusNames[node.status]}。詳細を開く`);
+        const top = element("span", "node-top");
+        top.append(element("span", "node-index mono", String(node.order).padStart(2, "0")));
+        top.append(element("span", "node-status mono", statusNames[node.status]));
+        card.append(top, element("span", "node-title", node.label), element("span", "node-description", node.description), element("span", "node-code", node.id));
+        card.addEventListener("click", () => { select(node); openDetail(node, card); });
+        stack.append(card);
+        cards.set(node.id, card);
+      }
+      panel.append(stack);
+      map.append(panel);
+    }
+    const stats = document.getElementById("stats");
+    for (const [value, label, accent] of [
+      [workflow.nodes.length, "正規工程", false],
+      [workflow.meta.parallel_node_count, "内部並列化済み", true],
+      [workflow.nodes.filter((node) => node.status === "serial").length, "内部直列", false],
+      [workflow.nodes.filter((node) => node.status === "guard").length, "必須の検証・固定", false],
+    ]) {
+      const stat = element("div", `stat${accent ? " stat--accent" : ""}`);
+      stat.append(element("strong", "", String(value)), element("span", "", label));
+      stats.append(stat);
+    }
+    select(selected);
+    for (const filter of document.querySelectorAll(".filter")) {
+      filter.addEventListener("click", () => {
+        const value = filter.dataset.filter;
+        for (const button of document.querySelectorAll(".filter")) button.setAttribute("aria-pressed", String(button === filter));
+        let shown = 0;
+        for (const node of workflow.nodes) {
+          const visible = value === "all" || node.status === value;
+          cards.get(node.id).hidden = !visible;
+          if (visible) shown++;
+        }
+        document.getElementById("filter-summary").textContent = `${shown}工程を表示。番号はV29の実行順序です。`;
+      });
+    }
+    document.getElementById("source-note").textContent = workflow.meta.note;
+  </script>
+</body>
+</html>

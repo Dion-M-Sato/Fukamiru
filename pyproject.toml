@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fukamiru"
+version = "0.32.1"
+description = "Local-first research workflow workbench"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{name = "Masanao Sato"}]
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=3.1",
+  "fastapi>=0.116,<1",
+  "pypdf>=5.9,<7",
+  "PyMuPDF>=1.26,<2",
+  "pydantic>=2.11,<3",
+  "truststore>=0.10,<1",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+japanese = [
+  "mecab-python3>=1.0.10,<2",
+  "unidic-lite>=1.0.8,<2",
+  "ginza>=5.2,<6",
+  "ja-ginza>=5.2,<6",
+]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<9",
+  "pytest-cov>=6.2,<7",
+  "pytest-xdist>=3,<4",
+  "ruff>=0.12,<1",
+]
+ocr = [
+  "mistralai>=2,<3",
+]
+rag = [
+  "faiss-cpu>=1.11,<2",
+  "numpy>=2,<3",
+  "sentence-transformers>=5,<6",
+  "torch==2.13.0",
+  "transformers>=4.46,<6",
+]
+
+[project.scripts]
+fukamiru = "fukamiru.cli:main"
+fukamiru-ocr = "fukamiru.ocr.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fukamiru"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

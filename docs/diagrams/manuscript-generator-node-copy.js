@@ -1,0 +1,612 @@
+// Generated node descriptions. Do not edit by hand.
+window.MANUSCRIPT_NODE_COPY = {
+  "lanes": [
+    {
+      "id": "source",
+      "title": "素材・主張",
+      "note": "Word由来の情報を保ったまま命題と中心問題を確定"
+    },
+    {
+      "id": "evidence",
+      "title": "調査・根拠",
+      "note": "既存文献とRAG／Webを根拠・書誌へ解決"
+    },
+    {
+      "id": "argument",
+      "title": "論証",
+      "note": "Claim / Evidence / Warrant / Rebuttalを接続"
+    },
+    {
+      "id": "discourse",
+      "title": "談話・段落",
+      "note": "談話木・節契約・意味段落で本文を拘束"
+    },
+    {
+      "id": "draft",
+      "title": "本文・監査",
+      "note": "資料保持型で起草し、構造逸脱を局所修復"
+    },
+    {
+      "id": "japanese",
+      "title": "日本語",
+      "note": "候補生成・選別・適用・表層ゲートを分離"
+    },
+    {
+      "id": "submission",
+      "title": "脚注・提出",
+      "note": "脚注→参考文献→監査→人間確認→提出"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "prepare_note",
+      "lane": "source",
+      "purpose": "Fukamiru取込本文を構造化ソースへ登録",
+      "summary": "FukamiruがWord等から抽出した本文、見出し、脚注、引用、既存参考文献を、後続処理が参照できる構造化ソースとして登録する。",
+      "input": "Fukamiru取込済みnote_text、取込メタデータ",
+      "output": "source_revision、段落ID、見出し階層、脚注・引用アンカー",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "prepare_rewrite_context",
+      "lane": "source",
+      "purpose": "現在の正本候補と由来を束ねる",
+      "summary": "その時点の原稿候補、元段落、既存脚注、直前の修正履歴を、必要範囲だけ後続ノードへ渡す。",
+      "input": "source_revision、既存候補（存在する場合）",
+      "output": "rewrite_context、source_provenance",
+      "wave": "W1",
+      "parallel": ""
+    },
+    {
+      "id": "extract_manuscript_references",
+      "lane": "source",
+      "purpose": "元原稿の引用・文献候補を抽出",
+      "summary": "Wordに元からある脚注、本文内引用、参考文献欄を抽出し、後段の書誌解決へ渡す。",
+      "input": "source_revision",
+      "output": "manuscript_reference_mentions、reference_anchors",
+      "wave": "W1",
+      "parallel": ""
+    },
+    {
+      "id": "decompose_memo",
+      "lane": "source",
+      "purpose": "意味的に最小の命題へ分解",
+      "summary": "原資料の内容を、出典箇所を失わずにatomic propositionへ分解する。",
+      "input": "rewrite_context、段落ID",
+      "output": "atomic_propositions + source_spans",
+      "wave": "",
+      "parallel": "×3 chunks"
+    },
+    {
+      "id": "classify_propositions",
+      "lane": "source",
+      "purpose": "命題型を分類",
+      "summary": "各命題を事実・観察・解釈・仮説・定義・方法・留保・例に分類する。",
+      "input": "atomic_propositions",
+      "output": "typed_propositions",
+      "wave": "",
+      "parallel": "×3 chunks"
+    },
+    {
+      "id": "review_manuscript_reasoning",
+      "lane": "source",
+      "purpose": "元原稿の論理資産と欠落を診断",
+      "summary": "元の因果、比較、留保、対立、推論飛躍を診断し、使える筋道と補うべき箇所を区別する。",
+      "input": "typed_propositions、source_provenance",
+      "output": "reasoning_inventory、reasoning_gaps",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "formulate_research_question",
+      "lane": "source",
+      "purpose": "中心問題を1問に固定",
+      "summary": "この原稿が最終的に何を説明・評価・比較するのかを一つのresearch questionへ固定する。",
+      "input": "typed_propositions、reasoning_inventory",
+      "output": "research_question + scope",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "build_claim_tree",
+      "lane": "source",
+      "purpose": "主命題→中間→下位命題を階層化",
+      "summary": "中心問題への回答としてMain Claim、Subclaim、下位命題を作り、元命題との対応を持つ。",
+      "input": "research_question、typed_propositions",
+      "output": "claim_tree、claim_source_links",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "build_source_preservation_map",
+      "lane": "source",
+      "purpose": "元情報の保持・移動・不採用を管理",
+      "summary": "元命題がどの主張・節に使われるか、留保されるか、重複統合されるかを記録する。",
+      "input": "claim_tree、atomic_propositions、source_provenance",
+      "output": "source_preservation_map",
+      "wave": "W2",
+      "parallel": "claim branches → reduce"
+    },
+    {
+      "id": "plan_research_queries",
+      "lane": "evidence",
+      "purpose": "主張ごとの調査要求を生成",
+      "summary": "各Claimの証拠不足、比較対象、反証条件に対応する最小限の検索要求を作る。",
+      "input": "claim_tree、reasoning_gaps、既存文献候補",
+      "output": "research_queries + claim_ids",
+      "wave": "W2",
+      "parallel": "×3 claims"
+    },
+    {
+      "id": "resolve_manuscript_evidence",
+      "lane": "evidence",
+      "purpose": "既存資料・RAG・Webから根拠を解決",
+      "summary": "既存文献を優先し、必要な不足だけをRAGやWebで補い、証拠をClaimへ接続する。",
+      "input": "research_queries、manuscript_reference_mentions",
+      "output": "evidence_items、retrieval_provenance",
+      "wave": "",
+      "parallel": "providers"
+    },
+    {
+      "id": "validate_evidence_support",
+      "lane": "evidence",
+      "purpose": "証拠が主張を実際に支えるか検証",
+      "summary": "引用候補の含意、射程、反対証拠、推測の混入をClaim単位で評価する。",
+      "input": "claim_tree、evidence_items",
+      "output": "support_verdicts、unsupported_claims",
+      "wave": "W3",
+      "parallel": "×3 claims"
+    },
+    {
+      "id": "resolve_reference_metadata",
+      "lane": "evidence",
+      "purpose": "書誌同定と重複統合",
+      "summary": "元原稿と新規根拠の著者・年・題名・媒体・DOI等を同定し、同一文献を統合する。",
+      "input": "reference_mentions、evidence_items",
+      "output": "reference_registry、stable_reference_ids",
+      "wave": "W3",
+      "parallel": "×3 refs"
+    },
+    {
+      "id": "validate_evidence_ready",
+      "lane": "evidence",
+      "purpose": "論証へ進める根拠状態を判定",
+      "summary": "必須主張のunsupported状態、書誌未解決、引用禁止条件を検査する。",
+      "input": "support_verdicts、reference_registry",
+      "output": "evidence_ready_gate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "build_argument_graph",
+      "lane": "argument",
+      "purpose": "Claimに証拠・warrant・限定・反証を接続",
+      "summary": "主張階層をToulmin型の要素と反論関係へ展開し、論証グラフを作る。",
+      "input": "claim_tree、support_verdicts、reasoning_inventory",
+      "output": "argument_graph",
+      "wave": "",
+      "parallel": "claim branches ×3 → reduce"
+    },
+    {
+      "id": "generate_hypotheses",
+      "lane": "argument",
+      "purpose": "欠落した因果・比較の仮説候補を作る",
+      "summary": "グラフ上の未接続部分について複数の説明仮説を生成し、採用条件と棄却条件を付ける。",
+      "input": "argument_graph、reasoning_gaps",
+      "output": "hypothesis_candidates",
+      "wave": "",
+      "parallel": "argument gaps ×3"
+    },
+    {
+      "id": "validate_argument_coverage",
+      "lane": "argument",
+      "purpose": "主張・根拠・反論の被覆を検査",
+      "summary": "主命題と各Subclaimに根拠、warrant、必要な限定、反論処理があるかを検査する。",
+      "input": "argument_graph、hypothesis_candidates",
+      "output": "validated_argument_graph、coverage_findings",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "build_discourse_tree",
+      "lane": "discourse",
+      "purpose": "修辞関係で節と段落を接続",
+      "summary": "Evidence、Explanation、Contrast、Elaboration、Condition等の関係で論証を談話木へ写像する。",
+      "input": "validated_argument_graph、research_question",
+      "output": "discourse_tree",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "plan_manuscript_structure",
+      "lane": "discourse",
+      "purpose": "談話木から可変の節構造を設計",
+      "summary": "必要な節だけを作り、元メモの節分けや固定文字数ではなく談話機能から構成を決める。",
+      "input": "discourse_tree、source_preservation_map",
+      "output": "section_plan、section_order",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "lock_section_contracts",
+      "lane": "discourse",
+      "purpose": "各節の問い・結論・証拠・遷移を固定",
+      "summary": "各節が答える問い、到達結論、使う証拠、次節への接続を契約として定義し、必要な段落役割を標準ラベルから選ぶ。",
+      "input": "section_plan、validated_argument_graph",
+      "output": "section_contracts（標準段落ラベルIDを含む）",
+      "wave": "",
+      "parallel": "sections ×3 → global check"
+    },
+    {
+      "id": "resolve_enumeration_context",
+      "lane": "discourse",
+      "purpose": "列挙・対比・順序関係を確定",
+      "summary": "第一／第二、前者／後者、以下の三点等が参照する要素と順序を確定する。",
+      "input": "section_contracts、source spans",
+      "output": "enumeration_plan",
+      "wave": "W4",
+      "parallel": ""
+    },
+    {
+      "id": "plan_semantic_paragraphs",
+      "lane": "discourse",
+      "purpose": "論証ムーブと段落を多対多に配置",
+      "summary": "談話上の必要性から段落境界を計画し、段落役割には標準ラベルIDを選択する。一つの段落に複数ムーブを統合する場合と、一つのムーブを複数段落へ展開する場合の両方を許可する。",
+      "input": "section_contracts、discourse_tree、標準段落ラベル一覧",
+      "output": "paragraph_plan（標準ラベルID）",
+      "wave": "W4",
+      "parallel": "section spans"
+    },
+    {
+      "id": "plan_term_introductions",
+      "lane": "discourse",
+      "purpose": "用語の初出・定義・再参照を計画",
+      "summary": "専門語や略語が初出で説明され、その後一貫した表記で参照される順序を作る。",
+      "input": "paragraph_plan、source terminology",
+      "output": "term_introduction_plan",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "draft_rewrite",
+      "lane": "draft",
+      "purpose": "構造制約に従い本文候補を生成",
+      "summary": "元資料を保持しつつ、論証グラフ・談話木・節契約・段落計画に従って原稿本文を生成する。",
+      "input": "section_contracts、paragraph_plan、argument_graph、evidence registry、source map",
+      "output": "draft_candidate + claim/source anchors",
+      "wave": "",
+      "parallel": "×3 sections"
+    },
+    {
+      "id": "reconcile_candidate_context",
+      "lane": "draft",
+      "purpose": "並列生成の境界と正本候補を統合",
+      "summary": "節ごとの候補を見出し階層、照応、参照ID、用語状態を保って一つの候補へ統合する。",
+      "input": "section draft candidates、contracts",
+      "output": "reconciled_candidate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "validate_source_preservation",
+      "lane": "draft",
+      "purpose": "元資料の脱落・歪曲を検査",
+      "summary": "source_preservation_mapと本文アンカーを突合し、重要命題の脱落、意味反転、出典逸失を検出する。",
+      "input": "reconciled_candidate、source_preservation_map",
+      "output": "source_preservation_findings",
+      "wave": "W5",
+      "parallel": ""
+    },
+    {
+      "id": "audit_structure",
+      "lane": "draft",
+      "purpose": "claim drift・topic drift・証拠不足を監査",
+      "summary": "節契約、談話木、論証グラフへの適合と、メタ説明・均等段落・飛躍を検査する。",
+      "input": "reconciled_candidate、all planning artifacts",
+      "output": "structure_audit_findings",
+      "wave": "W5",
+      "parallel": "sections ×3 + global"
+    },
+    {
+      "id": "join_draft_audits",
+      "lane": "draft",
+      "purpose": "保持検査と構造監査を待ち合わせ",
+      "summary": "W5の二つの監査が揃うまで待ち、所見を重複排除して成功経路または局所修復へ振り分ける。",
+      "input": "source_preservation_findings、structure_audit_findings",
+      "output": "draft_audit_gate、repair_contract",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "repair_failed_sections",
+      "lane": "draft",
+      "purpose": "失敗した節だけを契約内で修復",
+      "summary": "監査で失敗した節・段落だけを再生成し、成功済み本文は固定する。",
+      "input": "failed spans、repair contract、local source/evidence",
+      "output": "repaired_section_candidates",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "polish_prose",
+      "lane": "draft",
+      "purpose": "構造を変えず重複・係り受けを局所校正",
+      "summary": "論証・脚注アンカー・段落役割を固定したまま、冗長、重複、係り受け、接続表現を整える。",
+      "input": "audited_candidate、protected anchors",
+      "output": "polished_candidate",
+      "wave": "",
+      "parallel": "target spans ×3"
+    },
+    {
+      "id": "calibrate_manuscript_certainty",
+      "lane": "draft",
+      "purpose": "確度と断定表現を整合",
+      "summary": "Evidenceの強さ、Qualifier、仮説状態に応じて断定・推量・留保表現を検査する。",
+      "input": "polished_candidate、argument graph confidence",
+      "output": "certainty_calibrated_candidate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "validate_draft_coherence",
+      "lane": "draft",
+      "purpose": "節内・節間の談話一貫性を検証",
+      "summary": "局所中心の遷移、節契約、修辞関係、段落間参照を節単位と隣接節単位で検査する。",
+      "input": "certainty_calibrated_candidate、discourse_tree",
+      "output": "draft_coherence_verdicts",
+      "wave": "",
+      "parallel": "×3 sections/pairs"
+    },
+    {
+      "id": "repair_final_coherence",
+      "lane": "draft",
+      "purpose": "談話不整合だけを最終修復",
+      "summary": "一貫性検証で失敗した境界のみを、主張・根拠を変えずに修復する。",
+      "input": "failed coherence spans、local contracts",
+      "output": "coherence_repaired_candidates",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "extract_proofreading_sentences",
+      "lane": "japanese",
+      "purpose": "校正対象文を安定IDで抽出",
+      "summary": "本文から脚注アンカーや構造を壊さず、校正対象文と周辺文脈を抽出する。",
+      "input": "coherent draft candidate",
+      "output": "proofreading_units",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "generate_proofreading_candidates",
+      "lane": "japanese",
+      "purpose": "日本語修正候補を生成",
+      "summary": "各文について文法、係り受け、冗長、表記の修正候補を生成する。",
+      "input": "proofreading_units",
+      "output": "proofreading_candidates",
+      "wave": "",
+      "parallel": "sentence batches"
+    },
+    {
+      "id": "preprocess_proofreading_candidates",
+      "lane": "japanese",
+      "purpose": "禁止変更と無効候補を機械除外",
+      "summary": "意味変化、アンカー破壊、過大差分、形式不正の候補を事前除外する。",
+      "input": "proofreading_candidates",
+      "output": "screenable_candidates",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "screen_proofreading_with_luna",
+      "lane": "japanese",
+      "purpose": "残候補を軽量モデルで判定",
+      "summary": "修正の必要性、意味保存、自然さを候補単位で判定する。",
+      "input": "screenable_candidates",
+      "output": "candidate_screening_scores",
+      "wave": "",
+      "parallel": "candidate batches ×5"
+    },
+    {
+      "id": "select_proofreading_candidates",
+      "lane": "japanese",
+      "purpose": "採用する修正候補を決定",
+      "summary": "機械制約と判定スコアから、衝突しない修正だけを選択する。",
+      "input": "screening_scores、candidate diffs",
+      "output": "selected_candidate_patches",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "apply_selected_proofreading_candidates",
+      "lane": "japanese",
+      "purpose": "選択済み校正を正本候補へ適用",
+      "summary": "安定文IDと差分境界を使って採用修正を本文候補へ適用する。",
+      "input": "selected patches、coherent candidate",
+      "output": "proofread_candidate、application_log",
+      "wave": "W6",
+      "parallel": ""
+    },
+    {
+      "id": "publish_proofreading_shadow",
+      "lane": "japanese",
+      "purpose": "校正差分を監査用に可視化",
+      "summary": "原文・修正文・採否理由をshadow成果物として出力する。",
+      "input": "all proofreading candidates、selection",
+      "output": "proofreading_shadow_report",
+      "wave": "W6",
+      "parallel": ""
+    },
+    {
+      "id": "japanese_surface_quality_gate",
+      "lane": "japanese",
+      "purpose": "適用後の日本語と破損を検査",
+      "summary": "不自然な日本語、置換事故、脚注アンカー破壊、メタ説明残存を検査する。",
+      "input": "proofread_candidate、application_log",
+      "output": "surface_quality_gate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "reconcile_candidate_context_after_proofreading",
+      "lane": "japanese",
+      "purpose": "校正後本文と対応情報を次工程へ引き継ぐ",
+      "summary": "本文の文言は原則変えず、校正後本文から段落・Claim・出典の対応を再構築する。出典表記が失われた場合のみ、該当段落を校正前本文から復元する。",
+      "input": "proofread_candidate、application_log",
+      "output": "post_proofreading_candidate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "render_evidence_footnotes",
+      "lane": "submission",
+      "purpose": "本文アンカーから脚注を描画",
+      "summary": "本文のEvidenceアンカーをstable reference IDへ解決し、引用箇所ごとの脚注を生成する。",
+      "input": "post_proofreading_candidate、reference_registry、support verdicts",
+      "output": "footnoted_candidate、used_reference_ids",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "render_manuscript_references",
+      "lane": "submission",
+      "purpose": "使用脚注IDから参考文献一覧を生成",
+      "summary": "脚注で実際に使われたreference IDを順序・書式規則に従って一覧化する。",
+      "input": "used_reference_ids、reference_registry",
+      "output": "candidate_with_bibliography",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "validate_reference_quality",
+      "lane": "submission",
+      "purpose": "書誌品質と識別子を検証",
+      "summary": "必須フィールド、DOI/URL形式、重複、曖昧同定を検査する。",
+      "input": "reference_registry、rendered bibliography",
+      "output": "reference_quality_findings",
+      "wave": "W7",
+      "parallel": ""
+    },
+    {
+      "id": "validate_footnoted_references",
+      "lane": "submission",
+      "purpose": "本文・脚注・一覧の参照整合を検証",
+      "summary": "孤立脚注、未使用一覧、欠落参照、番号ずれ、ID不一致を検出する。",
+      "input": "footnoted candidate、bibliography",
+      "output": "reference_integrity_gate",
+      "wave": "W7",
+      "parallel": ""
+    },
+    {
+      "id": "validate_footnoted_structure",
+      "lane": "submission",
+      "purpose": "脚注描画後の文書構造を検証",
+      "summary": "見出し、段落、脚注配置、参考文献欄、HTML/文書構造の破損を検査する。",
+      "input": "candidate_with_bibliography",
+      "output": "footnoted_structure_gate",
+      "wave": "W7",
+      "parallel": ""
+    },
+    {
+      "id": "validate_footnoted_coherence",
+      "lane": "submission",
+      "purpose": "脚注込みの読みやすさを検証",
+      "summary": "脚注位置が主張との対応を曖昧にしていないか、本文の連続性を損なわないかを検査する。",
+      "input": "footnoted candidate、discourse tree",
+      "output": "footnoted_coherence_gate",
+      "wave": "W7",
+      "parallel": "sections/pairs ×3"
+    },
+    {
+      "id": "join_submission_validations",
+      "lane": "submission",
+      "purpose": "脚注・参考文献の全検証を待ち合わせ",
+      "summary": "W7の書誌品質、参照整合、文書構造、談話一貫性がすべて終了するまで凍結を開始しない。",
+      "input": "four validation results + candidate hash",
+      "output": "submission_validation_gate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "freeze_final_candidate",
+      "lane": "submission",
+      "purpose": "最終候補を不変スナップショット化",
+      "summary": "以後の監査が同一内容を対象にするよう、候補と全参照IDを固定する。",
+      "input": "all passed footnoted gates",
+      "output": "frozen_final_candidate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "validate_discourse_introductions",
+      "lane": "submission",
+      "purpose": "初出・照応・導入順を最終検証",
+      "summary": "用語初出、人物・制度の導入、指示表現、前提の先出し不足を検査する。",
+      "input": "frozen candidate、term plan、discourse tree",
+      "output": "introduction_findings",
+      "wave": "",
+      "parallel": "sections ×3 → first-use check"
+    },
+    {
+      "id": "audit_final_findings",
+      "lane": "submission",
+      "purpose": "全監査結果を重複排除し集約",
+      "summary": "構造、日本語、参照、談話、保持検査の結果を提出判断向けに統合する。",
+      "input": "all gate findings",
+      "output": "final_findings_ledger",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "validate_final_coherence",
+      "lane": "submission",
+      "purpose": "凍結候補の最終一貫性を判定",
+      "summary": "主張、談話、参照、正本ハッシュが各ゲートで同一候補を指すことを検査する。",
+      "input": "frozen candidate、final findings",
+      "output": "final_coherence_gate",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "evaluate_human_revision_requirement",
+      "lane": "submission",
+      "purpose": "人間修正の要否と箇所を判定",
+      "summary": "未解決根拠、意味判断、書誌曖昧性、残存重大所見から人間確認要否を分類する。",
+      "input": "final_coherence_gate、final_findings_ledger",
+      "output": "human_revision_decision、review_items",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "finalize_authoring",
+      "lane": "submission",
+      "purpose": "提出可能な原稿パッケージを組み立て",
+      "summary": "凍結済み本文、脚注、参考文献、検証概要、人間修正項目を一つの成果物へ組み立てる。",
+      "input": "frozen candidate、all final gates、human decision",
+      "output": "submission_html + manifest",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "submission_package",
+      "lane": "submission",
+      "purpose": "最終原稿と監査manifestを分離出力",
+      "summary": "提出用原稿、検証manifest、必要時の人間修正リストを明確なファイル名で出力する。",
+      "input": "finalized authoring artifact",
+      "output": "final manuscript、audit manifest、review list",
+      "wave": "",
+      "parallel": ""
+    },
+    {
+      "id": "human_approval",
+      "lane": "submission",
+      "purpose": "必要な場合だけ人間が承認・差戻し",
+      "summary": "自動判定で人間修正が必要とされた箇所を確認し、承認または対象ノードへ差し戻す。",
+      "input": "submission package、review items",
+      "output": "approved submission または scoped revision request",
+      "wave": "",
+      "parallel": ""
+    }
+  ]
+};

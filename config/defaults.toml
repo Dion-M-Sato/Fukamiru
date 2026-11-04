@@ -1,0 +1,206 @@
+[server]
+host = "127.0.0.1"
+port = 8765
+open_browser = true
+
+[paths]
+state_db = ""
+knowledge_db = ""
+runtime_root = ""
+corpus_root = ""
+ocr_root = ""
+knowledge_artifacts_root = ""
+faiss_root = ""
+
+[models.llm_jp]
+path = ""
+server_command = "llama-server"
+context_size = 4096
+gpu_layers = 99
+host = "127.0.0.1"
+port = 18081
+startup_timeout_seconds = 600
+request_timeout_seconds = 300
+device = ""
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+[models.gaperon]
+path = ""
+server_command = "llama-server"
+context_size = 4096
+gpu_layers = 99
+host = "127.0.0.1"
+port = 18082
+startup_timeout_seconds = 600
+request_timeout_seconds = 300
+device = ""
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+# V29の述語コロケーション候補をraw log probabilityで採点するbaseモデル。
+[models.llm_jp_base]
+path = ""
+server_command = "llama-server"
+context_size = 4096
+gpu_layers = 99
+host = "127.0.0.1"
+port = 18083
+startup_timeout_seconds = 600
+request_timeout_seconds = 300
+device = ""
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+[events]
+retention_days = 7
+max_events_per_run = 5000
+
+[retrieval]
+backend = "faiss"
+embedding_model = "BAAI/bge-m3"
+embedding_model_revision = "5617a9f61b028005a4858fdac845db406aefb181"
+# Empty means paths.runtime_root/cache/huggingface. Isolated services may point
+# this at the prepared canonical cache without sharing mutable Run state.
+embedding_cache_dir = ""
+embedding_device = "cuda"
+require_cuda = true
+embedding_batch_size = 8
+embedding_batch_min_size = 1
+# Defaults preserve the current execution path. Benchmark results decide next-run tuning.
+embedding_batch_strategy = "fixed"
+embedding_max_tokens_per_batch = 8192
+embedding_length_buckets = [256, 384, 512, 768, 1024]
+embedding_dtype = "float32"
+embedding_attention_backend = "auto"
+# Detailed CUDA timing is sampled so production batches are not synchronized one by one.
+embedding_measurement_interval_batches = 16
+semantic_enabled = true
+tokenizer_mode = "embedding"
+hybrid_rrf_k = 60
+target_tokens = 512
+soft_min_tokens = 384
+soft_max_tokens = 768
+hard_max_tokens = 1024
+overlap_source_spans = 1
+
+[worker]
+enabled = true
+poll_interval_seconds = 0.25
+lease_seconds = 90
+heartbeat_seconds = 15
+# External Codex uses a shared dynamic pool. When translation and manuscript work
+# coexist, each receives at least one slot; idle capacity is borrowed up to this cap.
+ingestion_cpu_max_concurrency = 3
+codex_max_concurrency = 5
+codex_checkpoint_seed_prefix_characters = 8192
+# Node-local fan-out is always clamped by the shared Codex cap above. Logical
+# review and reference inference stay lower because their prompts are broader.
+codex_review_concurrency = 3
+codex_reference_inference_concurrency = 2
+codex_enumeration_concurrency = 5
+codex_paragraph_concurrency = 5
+codex_rewrite_concurrency = 5
+codex_predicate_concurrency = 5
+# V27 coherence reads immutable candidates in parallel. Repairs remain serial.
+codex_coherence_concurrency = 3
+# V23 discourse planning and final discourse validation share the global pool.
+codex_discourse_concurrency = 5
+# V24 block-local Japanese ambiguity adjudication shares the same Codex pool.
+codex_japanese_analysis_concurrency = 5
+# Search and provider lookups use separate bounded pools; they do not consume
+# Codex slots, and all durable writes remain on the parent worker thread.
+evidence_search_concurrency = 5
+reference_lookup_concurrency = 5
+# A long translation repair checkpoints and yields its node after this many new batches.
+codex_translation_yield_batches = 20
+# A long local llm-jp node checkpoints and yields only when another local-LLM
+# workflow is queued, allowing translation and manuscript polish to take turns.
+local_llm_yield_chunks = 20
+# On 429/rate-limit responses, stop new starts briefly, run one-at-a-time, and
+# restore one slot per cooldown interval until the configured cap is reached.
+codex_rate_limit_retry_delay_seconds = 30
+codex_rate_limit_cooldown_seconds = 300
+
+[translation]
+provider = "codex"
+codex_command = "codex"
+# Manuscript inference uses GPT-5.6 Sol; stage-specific reasoning effort is unchanged.
+manuscript_codex_model = "gpt-5.6-sol"
+timeout_seconds = 900
+# Whole-document structure planning carries every block and receives a dedicated
+# deadline so a valid Codex result cannot arrive just after the generic timeout.
+manuscript_structure_timeout_seconds = 1800
+# After the normal deadline, accept a fully completed and schema-valid Codex result
+# during this bounded window instead of killing a process that is just finishing.
+manuscript_structure_timeout_grace_seconds = 30
+batch_characters = 12000
+# Q4 llm-jp post-edit policy: five physical lines per request, with a hard
+# character guard and an edit-only JSON response to bound decode time.
+post_edit_lines_per_chunk = 5
+post_edit_max_characters = 400
+post_edit_context_characters = 600
+post_edit_max_output_tokens = 512
+post_edit_max_edits_per_chunk = 2
+# The initial attempt may be followed by at most this many deterministic repairs.
+# Exhaustion pauses for human review instead of spinning indefinitely.
+post_edit_max_repair_rounds = 3
+# Manuscript polishing permits more edits than translation post-edit and therefore
+# needs a separate structured-output budget.
+manuscript_polish_max_output_tokens = 1536
+manuscript_polish_max_edits_per_chunk = 6
+# Manuscript-only N-best wording policy. llm-jp supplies alternatives while
+# deterministic gates and section-level corpus scoring own the final selection.
+manuscript_candidate_count = 6
+manuscript_candidate_top_k = 3
+manuscript_candidate_generation_attempts = 2
+# The first 100 decisions remain human-training examples; only the original is
+# applied until enough scoped choices have been recorded.
+manuscript_candidate_human_training_target = 100
+manuscript_candidate_auto_apply_margin = 0.12
+manuscript_candidate_max_targets = 400
+manuscript_candidate_beam_width = 24
+# Resolve named scholars, cited research and concept-bearing phrases before drafting.
+# OA PDFs are cached under Corpus/oa_downloads/translation_research and never used as
+# mutable database storage.
+academic_research_enabled = true
+academic_research_online = true
+academic_research_local_results = 3
+academic_research_provider_results = 3
+academic_research_sources = 3
+# Optional discovery is capped here. Explicit evidence obligations are always
+# scheduled so the quality gate cannot fail later solely because of this cap.
+academic_research_max_queries = 8
+academic_research_timeout_seconds = 45
+academic_research_max_pdf_bytes = 52428800
+# V32: fair per-obligation shares of estimated audit input across initial/retry stages.
+# Billing/output/OCR are separate; deadlines stop admission, not an in-flight request.
+academic_research_reading_rounds = 2
+academic_research_reading_input_tokens = 120000
+academic_research_reading_seconds = 180
+academic_research_ocr_pages = 3
+academic_research_ocr_seconds = 60
+# Auxiliary discovery after local evidence and the official database search.
+# RustXNG runs as a separate loopback service; machine overrides belong in local.toml.
+research_web_enabled = true
+rustxng_url = "http://127.0.0.1:29483"
+research_pdf_ocr_enabled = true
+
+[ocr]
+vision_language_detection = false
+provider = "language_router"
+output_format = "txt"
+mistral_model = "mistral-ocr-latest"
+mistral_max_attempts = 4
+ndlocr_command = "ndlocr-lite"
+ndlocr_timeout_seconds = 3600
+ndlocr_pdf_render_dpi = 150

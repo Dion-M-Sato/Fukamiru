@@ -1,0 +1,221 @@
+{
+  "type": "object",
+  "properties": {
+    "np_id": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "branch_advice": {
+      "type": "string",
+      "enum": [
+        "keep_only",
+        "explore",
+        "uncertain"
+      ]
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "compressed_relation",
+              "context_fit_issue",
+              "protected_term",
+              "conventional_expression",
+              "insufficient_context"
+            ]
+          },
+          "evidence_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 300
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 180
+          }
+        },
+        "required": [
+          "kind",
+          "evidence_text",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 3
+    },
+    "interpretations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "analysis_id": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "predicate_base": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 60
+          },
+          "head_noun": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 60
+          },
+          "head_relation": {
+            "type": "string",
+            "enum": [
+              "setting",
+              "purpose",
+              "object",
+              "result",
+              "agent",
+              "other",
+              "unknown"
+            ]
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entity_ref": {
+                  "type": "string",
+                  "maxLength": 40
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "agent",
+                    "theme",
+                    "experiencer",
+                    "other",
+                    "unknown"
+                  ]
+                },
+                "basis": {
+                  "type": "string",
+                  "enum": [
+                    "explicit",
+                    "inferred",
+                    "unresolved"
+                  ]
+                }
+              },
+              "required": [
+                "entity_ref",
+                "role",
+                "basis"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 4
+          },
+          "uncertainty": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 180
+            },
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "analysis_id",
+          "predicate_base",
+          "head_noun",
+          "head_relation",
+          "participants",
+          "uncertainty"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 2
+    },
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "proposal_id": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "analysis_id": {
+            "type": "string",
+            "maxLength": 20
+          },
+          "np_template": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "internal_voice": {
+            "type": "string",
+            "enum": [
+              "active",
+              "passive",
+              "not_applicable",
+              "unresolved"
+            ]
+          },
+          "placement": {
+            "type": "string",
+            "enum": [
+              "in_place",
+              "front_same_clause",
+              "unresolved"
+            ]
+          },
+          "extra_requirements": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 180
+            },
+            "maxItems": 3
+          },
+          "meaning_risks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 180
+            },
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "proposal_id",
+          "analysis_id",
+          "np_template",
+          "internal_voice",
+          "placement",
+          "extra_requirements",
+          "meaning_risks"
+        ],
+        "additionalProperties": false
+      },
+      "maxItems": 2
+    }
+  },
+  "required": [
+    "np_id",
+    "branch_advice",
+    "observations",
+    "interpretations",
+    "proposals"
+  ],
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local noun phrase probe, V31_NP_HYBRID_500_P1",
+  "description": "Instruct hypotheses only. Schema validity is not grammatical, semantic, or editorial approval. Cross-references and protected spans must be checked by the caller."
+}

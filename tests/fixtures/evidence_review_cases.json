@@ -1,0 +1,41 @@
+{
+  "schema_version": "31.1",
+  "origin": {
+    "policy": "synthetic-regression-cases",
+    "description": "人工の根拠監査ケース"
+  },
+  "sections": [
+    {
+      "section_id": "S005",
+      "sentence_id": "S005-P02-S03",
+      "claim_id": "C-S005-004",
+      "source_id": "SRC-014",
+      "failure": "RAG断片だけから著者の強い主張へ拡張した",
+      "expected_disposition": "human_review"
+    },
+    {
+      "section_id": "S014",
+      "sentence_id": "S014-P01-S02",
+      "claim_id": "C-S014-002",
+      "source_id": "MEMO-031",
+      "failure": "筆者の比較解釈を文献著者へ帰属させた",
+      "expected_disposition": "auto_repair"
+    },
+    {
+      "section_id": "S015",
+      "sentence_id": "S015-P03-S01",
+      "claim_id": "C-S015-006",
+      "source_id": "SRC-404",
+      "failure": "存在しないsource IDを引用した",
+      "expected_disposition": "blocking"
+    },
+    {
+      "section_id": "S018",
+      "sentence_id": "S018-P02-S02",
+      "claim_id": "C-S018-003",
+      "source_id": "SRC-018",
+      "failure": "原典確認事項を今後の課題としてConclusion本文へ転記した",
+      "expected_disposition": "auto_repair"
+    }
+  ]
+}

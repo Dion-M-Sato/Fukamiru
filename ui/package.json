@@ -1,0 +1,8 @@
+{
+  "name": "fukamiru-workbench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check src/app.js && node --check src/api.js && node --test tests/*.test.mjs"
+  }
+}

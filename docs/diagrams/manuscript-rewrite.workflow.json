@@ -1,0 +1,502 @@
+{
+  "schema_version": 3,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "原稿書き換えワークフロー",
+    "workflowVersion": "29",
+    "source": "fukamiru.workflow.templates.manuscript_rewrite_workflow_v29",
+    "parallel_node_count": 14,
+    "note": "15〜20はV29の全文日本語推敲工程です。最終修復後に根拠脚注を生成し、脚注で使った文献を末尾一覧へ統合して品質を再検証したうえで、脚注付きHTMLを読み取り専用で再監査してから固定します。V28以前の既存Runは変更しません。"
+  },
+  "stages": [
+    {
+      "id": "context",
+      "label": "01 / 資料と根拠",
+      "count": 8
+    },
+    {
+      "id": "argument",
+      "label": "02 / 論証と草稿",
+      "count": 6
+    },
+    {
+      "id": "japanese",
+      "label": "03 / 日本語推敲",
+      "count": 6
+    },
+    {
+      "id": "render",
+      "label": "04 / 書誌描画と修復",
+      "count": 8
+    },
+    {
+      "id": "freeze",
+      "label": "05 / 固定と判定",
+      "count": 5
+    }
+  ],
+  "mainPath": [
+    "prepare_rewrite_context",
+    "extract_manuscript_references",
+    "review_manuscript_reasoning",
+    "plan_manuscript_structure",
+    "plan_research_queries",
+    "resolve_manuscript_evidence",
+    "validate_evidence_support",
+    "resolve_reference_metadata",
+    "resolve_enumeration_context",
+    "plan_term_introductions",
+    "plan_semantic_paragraphs",
+    "draft_rewrite",
+    "calibrate_manuscript_certainty",
+    "validate_rewrite_coherence",
+    "extract_proofreading_sentences",
+    "generate_proofreading_candidates",
+    "preprocess_proofreading_candidates",
+    "screen_proofreading_with_luna",
+    "select_proofreading_candidates",
+    "publish_proofreading_shadow",
+    "render_manuscript_references",
+    "validate_reference_quality",
+    "validate_rendered_structure",
+    "repair_final_coherence",
+    "render_evidence_footnotes",
+    "validate_footnoted_references",
+    "validate_footnoted_structure",
+    "validate_footnoted_coherence",
+    "freeze_final_candidate",
+    "validate_discourse_introductions",
+    "audit_final_findings",
+    "validate_final_coherence",
+    "persist_rewrite_proposal"
+  ],
+  "nodes": [
+    {
+      "order": 1,
+      "id": "prepare_rewrite_context",
+      "label": "書換え準備",
+      "stage": "context",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "対象Revision・保護範囲を確定"
+    },
+    {
+      "order": 2,
+      "id": "extract_manuscript_references",
+      "label": "文献抽出",
+      "stage": "context",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "原稿内の文献候補を抽出"
+    },
+    {
+      "order": 3,
+      "id": "review_manuscript_reasoning",
+      "label": "論理レビュー",
+      "stage": "context",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "論証を単位別にレビュー"
+    },
+    {
+      "order": 4,
+      "id": "plan_manuscript_structure",
+      "label": "構造計画",
+      "stage": "context",
+      "resource_lane": "codex_remote",
+      "status": "serial",
+      "description": "骨格・論証・年代・談話を計画"
+    },
+    {
+      "order": 5,
+      "id": "plan_research_queries",
+      "label": "検索課題と検索文の整理",
+      "stage": "context",
+      "resource_lane": "ingestion_cpu",
+      "status": "parallel",
+      "description": "ローカルで検索課題を整理し必要時のみ推論"
+    },
+    {
+      "order": 6,
+      "id": "resolve_manuscript_evidence",
+      "label": "証拠解決",
+      "stage": "context",
+      "resource_lane": "ingestion_cpu",
+      "status": "parallel",
+      "description": "根拠資料を並列検索"
+    },
+    {
+      "order": 7,
+      "id": "validate_evidence_support",
+      "label": "主張の根拠・推論を検証",
+      "stage": "context",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "主張と根拠の支持関係を監査"
+    },
+    {
+      "order": 8,
+      "id": "resolve_reference_metadata",
+      "label": "文献メタデータ",
+      "stage": "context",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "書誌候補と来歴を照合"
+    },
+    {
+      "order": 9,
+      "id": "resolve_enumeration_context",
+      "label": "列挙文脈解決",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "列挙候補をバッチ評価"
+    },
+    {
+      "order": 10,
+      "id": "plan_term_introductions",
+      "label": "初出語・引用の談話計画",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "初出語と引用目的を計画"
+    },
+    {
+      "order": 11,
+      "id": "plan_semantic_paragraphs",
+      "label": "意味段落計画",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "意味段落と境界を計画"
+    },
+    {
+      "order": 12,
+      "id": "draft_rewrite",
+      "label": "書換えドラフト",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "節単位の草稿を生成・統合"
+    },
+    {
+      "order": 13,
+      "id": "calibrate_manuscript_certainty",
+      "label": "根拠の確実度・断定表現の調整",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "断定と確実性を調整"
+    },
+    {
+      "order": 14,
+      "id": "validate_rewrite_coherence",
+      "label": "書換え一貫性",
+      "stage": "argument",
+      "resource_lane": "codex_remote",
+      "status": "bounded",
+      "description": "節切片で推敲前検証・安全な局所修復"
+    },
+    {
+      "order": 15,
+      "id": "extract_proofreading_sentences",
+      "label": "文抽出と作品名登録",
+      "stage": "japanese",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "本文の対象文と保護すべき書誌的作品名を登録"
+    },
+    {
+      "order": 16,
+      "id": "generate_proofreading_candidates",
+      "label": "全文推敲候補生成",
+      "stage": "japanese",
+      "resource_lane": "local_llm_gpu",
+      "status": "serial",
+      "description": "llm-jp Instructで各文の全文候補を3件生成"
+    },
+    {
+      "order": 17,
+      "id": "preprocess_proofreading_candidates",
+      "label": "機械保護と文字差分",
+      "stage": "japanese",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "候補の正規化・重複除去・数値等の保護・lint・文字差分"
+    },
+    {
+      "order": 18,
+      "id": "screen_proofreading_with_luna",
+      "label": "Luna警告判定",
+      "stage": "japanese",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "GPT-5.6 Lunaで語形・統語事故のみ警告判定"
+    },
+    {
+      "order": 19,
+      "id": "select_proofreading_candidates",
+      "label": "推敲候補選択",
+      "stage": "japanese",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "安全判定と独立して候補を選択"
+    },
+    {
+      "order": 20,
+      "id": "publish_proofreading_shadow",
+      "label": "推敲プレビュー公開",
+      "stage": "japanese",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "原稿を書き換えず適用結果をプレビュー"
+    },
+    {
+      "order": 21,
+      "id": "render_manuscript_references",
+      "label": "参考文献整形",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "引用版の言語と資料種別に応じた利用者指定書式で、正規文献と未確認候補を同一終端節に描画"
+    },
+    {
+      "order": 22,
+      "id": "validate_reference_quality",
+      "label": "文献品質検証",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "書誌メタデータの品質を判定"
+    },
+    {
+      "order": 23,
+      "id": "validate_rendered_structure",
+      "label": "描画後の正本構造検証",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "描画後HTMLの終端・ID・ロックを決定的検査"
+    },
+    {
+      "order": 24,
+      "id": "repair_final_coherence",
+      "label": "最終原稿の局所修復",
+      "stage": "render",
+      "resource_lane": "codex_remote",
+      "status": "bounded",
+      "description": "変更節・隣接節・依存先を最大3巡で再検証"
+    },
+    {
+      "order": 25,
+      "id": "render_evidence_footnotes",
+      "label": "根拠脚注を生成",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "適用済み編集のevidence_idsを脚注・末尾文献・citation eventへ変換"
+    },
+    {
+      "order": 26,
+      "id": "validate_footnoted_references",
+      "label": "脚注文献の品質再検証",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "脚注で言及した全資料が末尾参考文献一覧へ統合され、書誌品質を満たすことを再検証"
+    },
+    {
+      "order": 27,
+      "id": "validate_footnoted_structure",
+      "label": "脚注後の正本構造検証",
+      "stage": "render",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "注節・参考文献末尾・段落境界ロックを再検証"
+    },
+    {
+      "order": 28,
+      "id": "validate_footnoted_coherence",
+      "label": "脚注付き最終候補を再監査",
+      "stage": "render",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "脚注生成後の確定HTMLを変更せず読み取り専用で再監査"
+    },
+    {
+      "order": 29,
+      "id": "freeze_final_candidate",
+      "label": "最終候補を固定",
+      "stage": "freeze",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "表層・構造を再確認しHTMLとSHA-256を固定"
+    },
+    {
+      "order": 30,
+      "id": "validate_discourse_introductions",
+      "label": "初出語・引用目的の最終検証",
+      "stage": "freeze",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "固定HTMLの初出語と引用目的を読取専用検証"
+    },
+    {
+      "order": 31,
+      "id": "audit_final_findings",
+      "label": "重大指摘の最終再監査",
+      "stage": "freeze",
+      "resource_lane": "codex_remote",
+      "status": "parallel",
+      "description": "重大指摘・未解決質問を対象別に再監査"
+    },
+    {
+      "order": 32,
+      "id": "validate_final_coherence",
+      "label": "最終一貫性",
+      "stage": "freeze",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "同じHTMLハッシュ上の品質証拠を集約"
+    },
+    {
+      "order": 33,
+      "id": "persist_rewrite_proposal",
+      "label": "提案を保存",
+      "stage": "freeze",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "判定済みの固定候補をProposalへ保存"
+    }
+  ],
+  "edges": [
+    {
+      "from": "prepare_rewrite_context",
+      "to": "extract_manuscript_references"
+    },
+    {
+      "from": "extract_manuscript_references",
+      "to": "review_manuscript_reasoning"
+    },
+    {
+      "from": "review_manuscript_reasoning",
+      "to": "plan_manuscript_structure"
+    },
+    {
+      "from": "plan_manuscript_structure",
+      "to": "plan_research_queries"
+    },
+    {
+      "from": "plan_research_queries",
+      "to": "resolve_manuscript_evidence"
+    },
+    {
+      "from": "resolve_manuscript_evidence",
+      "to": "validate_evidence_support"
+    },
+    {
+      "from": "validate_evidence_support",
+      "to": "resolve_reference_metadata"
+    },
+    {
+      "from": "resolve_reference_metadata",
+      "to": "resolve_enumeration_context"
+    },
+    {
+      "from": "resolve_enumeration_context",
+      "to": "plan_term_introductions"
+    },
+    {
+      "from": "plan_term_introductions",
+      "to": "plan_semantic_paragraphs"
+    },
+    {
+      "from": "plan_semantic_paragraphs",
+      "to": "draft_rewrite"
+    },
+    {
+      "from": "draft_rewrite",
+      "to": "calibrate_manuscript_certainty"
+    },
+    {
+      "from": "calibrate_manuscript_certainty",
+      "to": "validate_rewrite_coherence"
+    },
+    {
+      "from": "validate_rewrite_coherence",
+      "to": "extract_proofreading_sentences"
+    },
+    {
+      "from": "extract_proofreading_sentences",
+      "to": "generate_proofreading_candidates"
+    },
+    {
+      "from": "generate_proofreading_candidates",
+      "to": "preprocess_proofreading_candidates"
+    },
+    {
+      "from": "preprocess_proofreading_candidates",
+      "to": "screen_proofreading_with_luna"
+    },
+    {
+      "from": "screen_proofreading_with_luna",
+      "to": "select_proofreading_candidates"
+    },
+    {
+      "from": "select_proofreading_candidates",
+      "to": "publish_proofreading_shadow"
+    },
+    {
+      "from": "publish_proofreading_shadow",
+      "to": "render_manuscript_references"
+    },
+    {
+      "from": "render_manuscript_references",
+      "to": "validate_reference_quality"
+    },
+    {
+      "from": "validate_reference_quality",
+      "to": "validate_rendered_structure"
+    },
+    {
+      "from": "validate_rendered_structure",
+      "to": "repair_final_coherence"
+    },
+    {
+      "from": "repair_final_coherence",
+      "to": "render_evidence_footnotes"
+    },
+    {
+      "from": "render_evidence_footnotes",
+      "to": "validate_footnoted_references"
+    },
+    {
+      "from": "validate_footnoted_references",
+      "to": "validate_footnoted_structure"
+    },
+    {
+      "from": "validate_footnoted_structure",
+      "to": "validate_footnoted_coherence"
+    },
+    {
+      "from": "validate_footnoted_coherence",
+      "to": "freeze_final_candidate"
+    },
+    {
+      "from": "freeze_final_candidate",
+      "to": "validate_discourse_introductions"
+    },
+    {
+      "from": "validate_discourse_introductions",
+      "to": "audit_final_findings"
+    },
+    {
+      "from": "audit_final_findings",
+      "to": "validate_final_coherence"
+    },
+    {
+      "from": "validate_final_coherence",
+      "to": "persist_rewrite_proposal"
+    }
+  ]
+}

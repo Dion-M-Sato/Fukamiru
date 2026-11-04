@@ -1,0 +1,3295 @@
+{
+  "schema_version": 1,
+  "data_origin": "independently authored fictional catalog records",
+  "network_required": false,
+  "reference_count": 35,
+  "references": [
+    {
+      "index": 1,
+      "case_name": "synthetic-ja-01",
+      "foreign_fallback": false,
+      "mention_title": "架空資料01",
+      "source_entry": {
+        "reference_id": "fixture-reference-01",
+        "source_block_id": "FIXTURE-REFERENCE-01",
+        "entry_ordinal": 0,
+        "parse_status": "parsed",
+        "title": "架空資料01",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-01-edition-1",
+            "title": "架空資料01",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-01-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-01-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料01』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料01",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 2,
+      "case_name": "synthetic-en-02",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 02",
+      "source_entry": {
+        "reference_id": "fixture-reference-02",
+        "source_block_id": "FIXTURE-REFERENCE-02",
+        "entry_ordinal": 1,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 02",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-02-edition-1",
+            "title": "Synthetic Study 02",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-02-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-02-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-02-edition-2",
+            "title": "Synthetic Study 02",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-02-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-02-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 02』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 02",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 02",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 3,
+      "case_name": "synthetic-ja-03",
+      "foreign_fallback": false,
+      "mention_title": "架空資料03",
+      "source_entry": {
+        "reference_id": "fixture-reference-03",
+        "source_block_id": "FIXTURE-REFERENCE-03",
+        "entry_ordinal": 2,
+        "parse_status": "parsed",
+        "title": "架空資料03",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-03-edition-1",
+            "title": "架空資料03",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-03-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-03-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-03-edition-2",
+            "title": "架空資料03",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-03-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-03-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-03-edition-3",
+            "title": "架空資料03",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 3",
+            "year": "2003",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-03-3",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-03-3",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-03-edition-4",
+            "title": "架空資料03",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 4",
+            "year": "2004",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-03-4",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-03-4",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-03-edition-5",
+            "title": "架空資料03",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 5",
+            "year": "2005",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-03-5",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-03-5",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料03』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料03",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料03",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料03",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 3",
+          "year": "2003",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料03",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 4",
+          "year": "2004",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料03",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 5",
+          "year": "2005",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 4,
+      "case_name": "synthetic-en-04",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 04",
+      "source_entry": {
+        "reference_id": "fixture-reference-04",
+        "source_block_id": "FIXTURE-REFERENCE-04",
+        "entry_ordinal": 3,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 04",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-04-edition-1",
+            "title": "Synthetic Study 04",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-04-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-04-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 04』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 04",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 5,
+      "case_name": "synthetic-ja-05",
+      "foreign_fallback": false,
+      "mention_title": "架空資料05",
+      "source_entry": {
+        "reference_id": "fixture-reference-05",
+        "source_block_id": "FIXTURE-REFERENCE-05",
+        "entry_ordinal": 4,
+        "parse_status": "parsed",
+        "title": "架空資料05",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-05-edition-1",
+            "title": "架空資料05",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-05-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-05-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料05』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料05",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 6,
+      "case_name": "synthetic-en-fallback-06",
+      "foreign_fallback": true,
+      "mention_title": "架空資料06",
+      "source_entry": {
+        "reference_id": "fixture-reference-06",
+        "source_block_id": "FIXTURE-REFERENCE-06",
+        "entry_ordinal": 5,
+        "parse_status": "parsed",
+        "title": "架空資料06",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-06-edition-1",
+            "title": "Synthetic Study 06",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-06-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-06-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 06』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        },
+        "translation_side_discovery_triggered": true,
+        "translation_side_discovery_completed": true,
+        "japanese_manifestation_found": false,
+        "japanese_manifestation_ready": false,
+        "search_hypotheses": {
+          "titles": [
+            "Synthetic Study 06"
+          ],
+          "authors": [
+            "Alice Example"
+          ]
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 06",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 7,
+      "case_name": "synthetic-en-fallback-07",
+      "foreign_fallback": true,
+      "mention_title": "架空資料07",
+      "source_entry": {
+        "reference_id": "fixture-reference-07",
+        "source_block_id": "FIXTURE-REFERENCE-07",
+        "entry_ordinal": 6,
+        "parse_status": "parsed",
+        "title": "架空資料07",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-07-edition-1",
+            "title": "Synthetic Study 07",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-07-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-07-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-07-edition-2",
+            "title": "Synthetic Study 07",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-07-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-07-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 07』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        },
+        "translation_side_discovery_triggered": true,
+        "translation_side_discovery_completed": true,
+        "japanese_manifestation_found": false,
+        "japanese_manifestation_ready": false,
+        "search_hypotheses": {
+          "titles": [
+            "Synthetic Study 07"
+          ],
+          "authors": [
+            "Alice Example"
+          ]
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 07",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 07",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 8,
+      "case_name": "synthetic-en-08",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 08",
+      "source_entry": {
+        "reference_id": "fixture-reference-08",
+        "source_block_id": "FIXTURE-REFERENCE-08",
+        "entry_ordinal": 7,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 08",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-08-edition-1",
+            "title": "Synthetic Study 08",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-08-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-08-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-08-edition-2",
+            "title": "Synthetic Study 08",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-08-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-08-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 08』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 08",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 08",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 9,
+      "case_name": "synthetic-ja-09",
+      "foreign_fallback": false,
+      "mention_title": "架空資料09",
+      "source_entry": {
+        "reference_id": "fixture-reference-09",
+        "source_block_id": "FIXTURE-REFERENCE-09",
+        "entry_ordinal": 8,
+        "parse_status": "parsed",
+        "title": "架空資料09",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-09-edition-1",
+            "title": "架空資料09",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-09-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-09-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料09』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料09",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 10,
+      "case_name": "synthetic-en-10",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 10",
+      "source_entry": {
+        "reference_id": "fixture-reference-10",
+        "source_block_id": "FIXTURE-REFERENCE-10",
+        "entry_ordinal": 9,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 10",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-10-edition-1",
+            "title": "Synthetic Study 10",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-10-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-10-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 10』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 10",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 11,
+      "case_name": "synthetic-ja-11",
+      "foreign_fallback": false,
+      "mention_title": "架空資料11",
+      "source_entry": {
+        "reference_id": "fixture-reference-11",
+        "source_block_id": "FIXTURE-REFERENCE-11",
+        "entry_ordinal": 10,
+        "parse_status": "parsed",
+        "title": "架空資料11",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-11-edition-1",
+            "title": "架空資料11",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-11-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-11-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-11-edition-2",
+            "title": "架空資料11",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-11-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-11-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料11』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料11",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料11",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 12,
+      "case_name": "synthetic-en-12",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 12",
+      "source_entry": {
+        "reference_id": "fixture-reference-12",
+        "source_block_id": "FIXTURE-REFERENCE-12",
+        "entry_ordinal": 11,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 12",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-12-edition-1",
+            "title": "Synthetic Study 12",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-12-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-12-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-12-edition-2",
+            "title": "Synthetic Study 12",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-12-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-12-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-12-edition-3",
+            "title": "Synthetic Study 12",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 3",
+            "year": "2003",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-12-3",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-12-3",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-12-edition-4",
+            "title": "Synthetic Study 12",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 4",
+            "year": "2004",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-12-4",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-12-4",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 12』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 12",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 12",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 12",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 3",
+          "year": "2003",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 12",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 4",
+          "year": "2004",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 13,
+      "case_name": "synthetic-ja-13",
+      "foreign_fallback": false,
+      "mention_title": "架空資料13",
+      "source_entry": {
+        "reference_id": "fixture-reference-13",
+        "source_block_id": "FIXTURE-REFERENCE-13",
+        "entry_ordinal": 12,
+        "parse_status": "parsed",
+        "title": "架空資料13",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-13-edition-1",
+            "title": "架空資料13",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-13-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-13-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料13』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料13",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 14,
+      "case_name": "synthetic-en-14",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 14",
+      "source_entry": {
+        "reference_id": "fixture-reference-14",
+        "source_block_id": "FIXTURE-REFERENCE-14",
+        "entry_ordinal": 13,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 14",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-14-edition-1",
+            "title": "Synthetic Study 14",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-14-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-14-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-14-edition-2",
+            "title": "Synthetic Study 14",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-14-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-14-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-14-edition-3",
+            "title": "Synthetic Study 14",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 3",
+            "year": "2003",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-14-3",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-14-3",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-14-edition-4",
+            "title": "Synthetic Study 14",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 4",
+            "year": "2004",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-14-4",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-14-4",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-14-edition-5",
+            "title": "Synthetic Study 14",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 5",
+            "year": "2005",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-14-5",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-14-5",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 14』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 14",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 14",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 14",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 3",
+          "year": "2003",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 14",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 4",
+          "year": "2004",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 14",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 5",
+          "year": "2005",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 15,
+      "case_name": "synthetic-ja-15",
+      "foreign_fallback": false,
+      "mention_title": "架空資料15",
+      "source_entry": {
+        "reference_id": "fixture-reference-15",
+        "source_block_id": "FIXTURE-REFERENCE-15",
+        "entry_ordinal": 14,
+        "parse_status": "parsed",
+        "title": "架空資料15",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-15-edition-1",
+            "title": "架空資料15",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-15-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-15-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料15』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料15",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 16,
+      "case_name": "synthetic-en-16",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 16",
+      "source_entry": {
+        "reference_id": "fixture-reference-16",
+        "source_block_id": "FIXTURE-REFERENCE-16",
+        "entry_ordinal": 15,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 16",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-16-edition-1",
+            "title": "Synthetic Study 16",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-16-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-16-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          },
+          {
+            "candidate_id": "fictional-study-16-edition-2",
+            "title": "Synthetic Study 16",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-16-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-16-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 16』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 16",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        },
+        {
+          "title": "Synthetic Study 16",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 17,
+      "case_name": "synthetic-ja-17",
+      "foreign_fallback": false,
+      "mention_title": "架空資料17",
+      "source_entry": {
+        "reference_id": "fixture-reference-17",
+        "source_block_id": "FIXTURE-REFERENCE-17",
+        "entry_ordinal": 16,
+        "parse_status": "parsed",
+        "title": "架空資料17",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-17-edition-1",
+            "title": "架空資料17",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-17-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-17-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料17』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料17",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 18,
+      "case_name": "synthetic-en-18",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 18",
+      "source_entry": {
+        "reference_id": "fixture-reference-18",
+        "source_block_id": "FIXTURE-REFERENCE-18",
+        "entry_ordinal": 17,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 18",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-18-edition-1",
+            "title": "Synthetic Study 18",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-18-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-18-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 18』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 18",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 19,
+      "case_name": "synthetic-ja-19",
+      "foreign_fallback": false,
+      "mention_title": "架空資料19",
+      "source_entry": {
+        "reference_id": "fixture-reference-19",
+        "source_block_id": "FIXTURE-REFERENCE-19",
+        "entry_ordinal": 18,
+        "parse_status": "parsed",
+        "title": "架空資料19",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-19-edition-1",
+            "title": "架空資料19",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-19-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-19-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料19』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料19",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 20,
+      "case_name": "synthetic-en-20",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 20",
+      "source_entry": {
+        "reference_id": "fixture-reference-20",
+        "source_block_id": "FIXTURE-REFERENCE-20",
+        "entry_ordinal": 19,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 20",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-20-edition-1",
+            "title": "Synthetic Study 20",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-20-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-20-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 20』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 20",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 21,
+      "case_name": "synthetic-ja-21",
+      "foreign_fallback": false,
+      "mention_title": "架空資料21",
+      "source_entry": {
+        "reference_id": "fixture-reference-21",
+        "source_block_id": "FIXTURE-REFERENCE-21",
+        "entry_ordinal": 20,
+        "parse_status": "parsed",
+        "title": "架空資料21",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-21-edition-1",
+            "title": "架空資料21",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-21-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-21-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料21』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料21",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 22,
+      "case_name": "synthetic-en-22",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 22",
+      "source_entry": {
+        "reference_id": "fixture-reference-22",
+        "source_block_id": "FIXTURE-REFERENCE-22",
+        "entry_ordinal": 21,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 22",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-22-edition-1",
+            "title": "Synthetic Study 22",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-22-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-22-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 22』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 22",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 23,
+      "case_name": "synthetic-ja-23",
+      "foreign_fallback": false,
+      "mention_title": "架空資料23",
+      "source_entry": {
+        "reference_id": "fixture-reference-23",
+        "source_block_id": "FIXTURE-REFERENCE-23",
+        "entry_ordinal": 22,
+        "parse_status": "parsed",
+        "title": "架空資料23",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-23-edition-1",
+            "title": "架空資料23",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-23-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-23-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料23』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料23",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 24,
+      "case_name": "synthetic-en-24",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 24",
+      "source_entry": {
+        "reference_id": "fixture-reference-24",
+        "source_block_id": "FIXTURE-REFERENCE-24",
+        "entry_ordinal": 23,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 24",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-24-edition-1",
+            "title": "Synthetic Study 24",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-24-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-24-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 24』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 24",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 25,
+      "case_name": "synthetic-ja-25",
+      "foreign_fallback": false,
+      "mention_title": "架空資料25",
+      "source_entry": {
+        "reference_id": "fixture-reference-25",
+        "source_block_id": "FIXTURE-REFERENCE-25",
+        "entry_ordinal": 24,
+        "parse_status": "parsed",
+        "title": "架空資料25",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-25-edition-1",
+            "title": "架空資料25",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-25-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-25-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料25』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料25",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 26,
+      "case_name": "synthetic-en-26",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 26",
+      "source_entry": {
+        "reference_id": "fixture-reference-26",
+        "source_block_id": "FIXTURE-REFERENCE-26",
+        "entry_ordinal": 25,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 26",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-26-edition-1",
+            "title": "Synthetic Study 26",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-26-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-26-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 26』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 26",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 27,
+      "case_name": "synthetic-ja-27",
+      "foreign_fallback": false,
+      "mention_title": "架空資料27",
+      "source_entry": {
+        "reference_id": "fixture-reference-27",
+        "source_block_id": "FIXTURE-REFERENCE-27",
+        "entry_ordinal": 26,
+        "parse_status": "parsed",
+        "title": "架空資料27",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-27-edition-1",
+            "title": "架空資料27",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-27-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-27-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-27-edition-2",
+            "title": "架空資料27",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-27-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-27-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料27』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料27",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料27",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 28,
+      "case_name": "synthetic-en-28",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 28",
+      "source_entry": {
+        "reference_id": "fixture-reference-28",
+        "source_block_id": "FIXTURE-REFERENCE-28",
+        "entry_ordinal": 27,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 28",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-28-edition-1",
+            "title": "Synthetic Study 28",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-28-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-28-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 28』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 28",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 29,
+      "case_name": "synthetic-ja-29",
+      "foreign_fallback": false,
+      "mention_title": "架空資料29",
+      "source_entry": {
+        "reference_id": "fixture-reference-29",
+        "source_block_id": "FIXTURE-REFERENCE-29",
+        "entry_ordinal": 28,
+        "parse_status": "parsed",
+        "title": "架空資料29",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-29-edition-1",
+            "title": "架空資料29",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-29-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-29-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料29』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料29",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 30,
+      "case_name": "synthetic-en-30",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 30",
+      "source_entry": {
+        "reference_id": "fixture-reference-30",
+        "source_block_id": "FIXTURE-REFERENCE-30",
+        "entry_ordinal": 29,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 30",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-30-edition-1",
+            "title": "Synthetic Study 30",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-30-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-30-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 30』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 30",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 31,
+      "case_name": "synthetic-ja-31",
+      "foreign_fallback": false,
+      "mention_title": "架空資料31",
+      "source_entry": {
+        "reference_id": "fixture-reference-31",
+        "source_block_id": "FIXTURE-REFERENCE-31",
+        "entry_ordinal": 30,
+        "parse_status": "parsed",
+        "title": "架空資料31",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-31-edition-1",
+            "title": "架空資料31",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-31-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-31-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料31』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料31",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 32,
+      "case_name": "synthetic-en-32",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 32",
+      "source_entry": {
+        "reference_id": "fixture-reference-32",
+        "source_block_id": "FIXTURE-REFERENCE-32",
+        "entry_ordinal": 31,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 32",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-32-edition-1",
+            "title": "Synthetic Study 32",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-32-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-32-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 32』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 32",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 33,
+      "case_name": "synthetic-ja-33",
+      "foreign_fallback": false,
+      "mention_title": "架空資料33",
+      "source_entry": {
+        "reference_id": "fixture-reference-33",
+        "source_block_id": "FIXTURE-REFERENCE-33",
+        "entry_ordinal": 32,
+        "parse_status": "parsed",
+        "title": "架空資料33",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-33-edition-1",
+            "title": "架空資料33",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-33-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-33-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-33-edition-2",
+            "title": "架空資料33",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 2",
+            "year": "2002",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-33-2",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-33-2",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          },
+          {
+            "candidate_id": "fictional-study-33-edition-3",
+            "title": "架空資料33",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 3",
+            "year": "2003",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [
+              "田中一郎"
+            ],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-33-3",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-33-3",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著",
+                  "田中一郎 訳"
+                ]
+              }
+            ],
+            "is_translation": true,
+            "translation_status": "confirmed_translation"
+          }
+        ],
+        "original_text": "山田花子『架空資料33』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "MULTIPLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料33",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料33",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 2",
+          "year": "2002",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        },
+        {
+          "title": "架空資料33",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [
+            "田中一郎"
+          ],
+          "publisher": "Example Press 3",
+          "year": "2003",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 34,
+      "case_name": "synthetic-en-34",
+      "foreign_fallback": false,
+      "mention_title": "Synthetic Study 34",
+      "source_entry": {
+        "reference_id": "fixture-reference-34",
+        "source_block_id": "FIXTURE-REFERENCE-34",
+        "entry_ordinal": 33,
+        "parse_status": "parsed",
+        "title": "Synthetic Study 34",
+        "author": "Alice Example",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-34-edition-1",
+            "title": "Synthetic Study 34",
+            "record_type": "book",
+            "publication_language": "en",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "Alice Example"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-34-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-34-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "Alice Example 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "Alice Example『Synthetic Study 34』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "Synthetic Study 34",
+          "authors": [
+            "Alice Example"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "en"
+        }
+      ],
+      "expected_node22_blocking": false
+    },
+    {
+      "index": 35,
+      "case_name": "synthetic-ja-35",
+      "foreign_fallback": false,
+      "mention_title": "架空資料35",
+      "source_entry": {
+        "reference_id": "fixture-reference-35",
+        "source_block_id": "FIXTURE-REFERENCE-35",
+        "entry_ordinal": 34,
+        "parse_status": "parsed",
+        "title": "架空資料35",
+        "author": "山田花子",
+        "record_type": "book_or_journal",
+        "candidate_matches": [
+          {
+            "candidate_id": "fictional-study-35-edition-1",
+            "title": "架空資料35",
+            "record_type": "book",
+            "publication_language": "ja",
+            "publisher": "Example Press 1",
+            "year": "2001",
+            "authors": [
+              "山田花子"
+            ],
+            "translators": [],
+            "provider": "fixture_catalog",
+            "url": "https://catalog.example.test/records/study-35-1",
+            "responsibility_sources": [
+              {
+                "provider": "fixture_catalog",
+                "url": "https://catalog.example.test/records/study-35-1",
+                "responsibility_source": "exact_record_detail",
+                "responsibility_raw": [
+                  "山田花子 著"
+                ]
+              }
+            ]
+          }
+        ],
+        "original_text": "山田花子『架空資料35』",
+        "provenance": {
+          "title": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          },
+          "author": {
+            "kind": "source_explicit",
+            "label": "人工入力"
+          }
+        }
+      },
+      "expected_state": "SINGLE",
+      "expected_candidates": [
+        {
+          "title": "架空資料35",
+          "authors": [
+            "山田花子"
+          ],
+          "translators": [],
+          "publisher": "Example Press 1",
+          "year": "2001",
+          "edition": null,
+          "volume": null,
+          "isbn": null,
+          "record_type": "book",
+          "publication_language": "ja"
+        }
+      ],
+      "expected_node22_blocking": false
+    }
+  ]
+}

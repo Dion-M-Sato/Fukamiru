@@ -1,0 +1,153 @@
+# Relative paths are resolved from the Fukamiru repository root.
+[server]
+host = "127.0.0.1"
+port = 8766
+open_browser = true
+
+[paths]
+state_db = "data/state.db"
+knowledge_db = "data/knowledge.db"
+runtime_root = "runtime"
+corpus_root = "corpus/sources"
+ocr_root = "corpus/ocr"
+knowledge_artifacts_root = "corpus/knowledge"
+faiss_root = "corpus/vector-index/faiss"
+
+[models.llm_jp]
+path = ""
+server_command = "llama-server"
+host = "127.0.0.1"
+port = 18091
+startup_timeout_seconds = 600
+# Example for a Vulkan llama.cpp build: device = "Vulkan1"
+device = ""
+# Windowsで自動VRAM fitまたはHTTP thread検出が停止する場合のみ明示する。
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+# Gaperonは実在PATHを確認してから設定する。
+[models.gaperon]
+path = ""
+server_command = "llama-server"
+host = "127.0.0.1"
+port = 18092
+startup_timeout_seconds = 600
+device = ""
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+[models.llm_jp_base]
+path = ""
+server_command = "llama-server"
+host = "127.0.0.1"
+port = 18093
+startup_timeout_seconds = 600
+request_timeout_seconds = 300
+device = ""
+fit = true
+warmup = true
+parallel_slots = 1
+http_threads = -1
+webui = true
+
+[retrieval]
+backend = "faiss"
+embedding_model = "BAAI/bge-m3"
+embedding_model_revision = "5617a9f61b028005a4858fdac845db406aefb181"
+# Empty means paths.runtime_root/cache/huggingface. An isolated runtime can use
+# an explicit prepared cache path; model downloads never occur during a Run.
+embedding_cache_dir = ""
+embedding_device = "cpu"
+require_cuda = false
+embedding_batch_size = 8
+embedding_batch_min_size = 1
+embedding_batch_strategy = "fixed"
+embedding_max_tokens_per_batch = 8192
+embedding_length_buckets = [256, 384, 512, 768, 1024]
+embedding_dtype = "float32"
+embedding_attention_backend = "auto"
+embedding_measurement_interval_batches = 16
+semantic_enabled = false
+tokenizer_mode = "unicode"
+hybrid_rrf_k = 60
+
+[worker]
+enabled = true
+lease_seconds = 90
+heartbeat_seconds = 15
+ingestion_cpu_max_concurrency = 3
+codex_max_concurrency = 5
+codex_checkpoint_seed_prefix_characters = 8192
+codex_review_concurrency = 3
+codex_reference_inference_concurrency = 2
+codex_enumeration_concurrency = 5
+codex_paragraph_concurrency = 5
+codex_rewrite_concurrency = 5
+codex_predicate_concurrency = 5
+codex_coherence_concurrency = 3
+codex_discourse_concurrency = 5
+codex_japanese_analysis_concurrency = 5
+evidence_search_concurrency = 5
+reference_lookup_concurrency = 5
+codex_translation_yield_batches = 20
+local_llm_yield_chunks = 20
+codex_rate_limit_retry_delay_seconds = 30
+codex_rate_limit_cooldown_seconds = 300
+
+[translation]
+# Codex CLIで `codex login status` が成功する状態にしてください。
+# Windowsの既定値はCodex Desktop同梱CLIをPATH上の古いCLIより優先して自動解決します。
+# 固定パスを指定する場合も、不在・非対応ならDesktop、PATHの順に検証してfallbackします。
+provider = "codex"
+codex_command = "codex"
+# 原稿推論に使う固定モデル（工程ごとの推論レベルは従来どおり）。
+manuscript_codex_model = "gpt-5.6-sol"
+timeout_seconds = 900
+# 全文構造計画は通常の小分け処理より長いため、専用のタイムアウトを使う。
+manuscript_structure_timeout_seconds = 1800
+manuscript_structure_timeout_grace_seconds = 30
+batch_characters = 12000
+# 4bit llm-jpは全文を一括送信せず、5行単位で後編集する。
+post_edit_lines_per_chunk = 5
+post_edit_max_characters = 400
+post_edit_context_characters = 600
+post_edit_max_output_tokens = 512
+post_edit_max_edits_per_chunk = 2
+post_edit_max_repair_rounds = 3
+manuscript_polish_max_output_tokens = 1536
+manuscript_polish_max_edits_per_chunk = 6
+manuscript_candidate_count = 6
+manuscript_candidate_top_k = 3
+manuscript_candidate_generation_attempts = 2
+manuscript_candidate_human_training_target = 100
+manuscript_candidate_auto_apply_margin = 0.12
+manuscript_candidate_max_targets = 400
+manuscript_candidate_beam_width = 24
+academic_research_enabled = true
+academic_research_online = true
+academic_research_local_results = 3
+academic_research_provider_results = 3
+academic_research_sources = 3
+# 任意の探索だけを制限する。明示的な根拠確認は、この値を超えても省略しない。
+academic_research_max_queries = 8
+academic_research_timeout_seconds = 45
+academic_research_max_pdf_bytes = 52428800
+
+[ocr]
+# Use the configured Codex model to identify unreadable PDF language from page images.
+vision_language_detection = false
+# 英語・フランス語・ロシア語・中国語・韓国語・ドイツ語はMistral OCR、日本語はローカルNDLOCR-Liteへ振り分けます。
+provider = "language_router"
+output_format = "txt"
+mistral_model = "mistral-ocr-latest"
+mistral_max_attempts = 4
+# 専用venvを使う場合は実行ファイルの絶対パスを指定します。
+ndlocr_command = "ndlocr-lite"
+ndlocr_timeout_seconds = 3600
+ndlocr_pdf_render_dpi = 150

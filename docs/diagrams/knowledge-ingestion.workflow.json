@@ -1,0 +1,1132 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "RAG作成ワークフロー V2グラフ",
+    "workflowVersion": "2",
+    "source": "fukamiru.workflow.templates.corpus_sync_workflow",
+    "parallel_node_count": 2,
+    "note": "corpus_sync V2は原文を2レーンで取り込みながら、独立した言語判定レーンとOCRレーンで並行実行します。画像LLM言語判定は2件同時に開始し、成功に応じて設定されたCodex同時実行上限まで（現在は3件）増やします。429応答時だけ同時実行数を減らして全体を一時待機し、各ジョブの再試行時刻と最大15分の指数バックオフを保存します。OCRはページ見出し付きMarkdownとJSONを保存し、元のItemを同期キューへ戻します。PDF解析結果を共用し、OCR来歴を一括保存し、Chunk計算後の短いトランザクションで検索データを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 Corpus同期の既定対象はmanaged_sourcesとimport_stagingです。親フォルダを選んだ場合もこの2箇所だけを走査し、archivedとoa_downloadsは含めません。元ファイルは移動せず、対応形式のみを収集します。 レイアウト解析が失敗したPDFも、原本を保持したまま全ページを画像化して強制OCRへ送り、元Itemを同期キューへ戻します。 過去の失敗Itemも原因に応じて再投入し、完了済みOCRは同じジョブから取り込み直します。SourceSpan再構築失敗はページ画像の強制OCRへ合流します。PDF保存時の一時的ファイルロックは短く再試行し、CP932の日本語TXTを判定します。EPUBのゼロ幅書式文字だけのSpanは検索Chunkを作らず保持します。 空のPDFとmacOSの._付随ファイルは新規走査から除外し、既存Batchでは元Item・失敗履歴を保持してスキップ理由を記録し、対象総数から除外します。 NDLOCR-LiteはAPI用のCPUを確保するため、優先度とCPU使用枠を制限した直接子プロセスで実行します。PDFメタデータの読取失敗はOCR本文の取り込みを中断しません。 長大なOCR本文の段落分割は線形走査で処理し、APIの応答を塞ぐ正規表現のバックトラックを避けます。通常取り込みのPDF解析・OCR・言語判定はAPIとは別の子プロセスで実行し、サービス終了時はWindows Job Objectで子プロセスも終了します。大容量PDFのMistral OCRは最大20ページ・20MiBの範囲に分割し、原本SHAとモデルに紐付くページ群の結果を保存して再開します。NDLOCR-LiteのXML解析失敗時は同じ原本をMistral OCRへ代替します。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。",
+    "summary": "検索区間v2は文字範囲と実トークン数を保証。NDLOCRはJSON専用で不要なPDF生成を省き、利用者が保留した失敗資料は履歴付きで当該Runから除外します。"
+  },
+  "relatedWorkflow": {
+    "name": "ingestion",
+    "version": "2",
+    "title": "単一資料だけを取り込む",
+    "entry": "locate_source",
+    "nodes": [
+      "locate_source",
+      "inspect_text_layer",
+      "run_ocr",
+      "register_asset",
+      "extract_text",
+      "audit_ocr",
+      "infer_structure",
+      "build_chunks",
+      "index_chunks"
+    ],
+    "shared": "SourceAsset・OCR Revision・DocumentUnit・SourceSpan・Chunk・SQLite FTS5を、Corpus同期と同じknowledge.dbへ保存します。",
+    "difference": "単一資料Runは画像PDF・暗号化PDF・Token位置を取得できないPDFを、原本を保存したまま言語別OCRへ送り、OCR監査・構造再構築を経てFTS5へ進みます。",
+    "convergence": "単一資料Runで作られた利用可能Chunkは、次回のcorpus_syncが全Corpus署名を計算するときに合流し、Semantic索引へ収録されます。"
+  },
+  "singleWorkflow": {
+    "meta": {
+      "title": "単一資料取り込み V2グラフ",
+      "workflowVersion": "2",
+      "source": "fukamiru.workflow.templates.ingestion_workflow",
+      "parallel_node_count": 0,
+      "note": "原本PDFとページ参照を保持し、OCR来歴を一括保存します。ChunkのToken計算後に短いトランザクションでLexical索引向けデータを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。"
+    },
+    "stages": [
+      {
+        "id": "identify",
+        "label": "01 / 資料識別",
+        "count": 1
+      },
+      {
+        "id": "preflight",
+        "label": "02 / テキスト層判定",
+        "count": 1
+      },
+      {
+        "id": "ocr",
+        "label": "03 / 言語別OCR",
+        "count": 1
+      },
+      {
+        "id": "extract",
+        "label": "04 / 登録・抽出・監査",
+        "count": 3
+      },
+      {
+        "id": "structure",
+        "label": "05 / 構造とChunk",
+        "count": 2
+      },
+      {
+        "id": "lexical",
+        "label": "06 / Lexical公開",
+        "count": 1
+      }
+    ],
+    "mainPath": [
+      "locate_source",
+      "inspect_text_layer",
+      "run_ocr",
+      "register_asset",
+      "extract_text",
+      "audit_ocr",
+      "infer_structure",
+      "build_chunks",
+      "index_chunks"
+    ],
+    "nodes": [
+      {
+        "order": 1,
+        "id": "locate_source",
+        "label": "資料を検証・識別",
+        "stage": "identify",
+        "resource_lane": "ingestion_cpu",
+        "status": "serial",
+        "description": "原本の存在・形式・SHA-256を確定",
+        "role": "指定された1ファイルを解決し、対応形式、サイズ、media type、SHA-256を確定します。",
+        "target": "UIから渡されたsource_pathだけを単一の処理対象にします。",
+        "boundary": "ファイルの存在と形式を確認してから不変識別子を計算します。",
+        "safety": "原本は読み取りだけに使い、OCR用複製の作成前後にもSHA-256を照合します。",
+        "steps": [
+          "パス正規化",
+          "存在確認",
+          "形式確認",
+          "SHA-256",
+          "media type"
+        ]
+      },
+      {
+        "id": "inspect_text_layer",
+        "label": "PDFテキスト層を判定",
+        "stage": "preflight",
+        "resource_lane": "ingestion_cpu",
+        "status": "guard",
+        "description": "通常抽出・OCR・暗号化PDFの画像化を分岐",
+        "role": "PDFのテキスト層をページ単位で検査し、既存抽出へ進めるか言語別OCRが必要かを決めます。 暗号化PDFの読込失敗では、全ページの表示画像を非暗号化・テキスト層なしPDFにまとめ、強制OCRジョブへ送ります。",
+        "target": "単一取り込みと一括同期で同じ判定条件を利用します。",
+        "boundary": "PDF以外は通過し、利用可能なテキスト層がないPDFだけをOCRジョブへ送ります。",
+        "safety": "原本・複製のSHA-256とページ順・寸法を記録。複製は非暗号化かつ文字層ゼロを確認し、表示パスワードが必要なら明示的なエラーにします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。",
+        "order": 2,
+        "before": "原本SHA-256とPDFの読込・文字品質を確認",
+        "branches": [
+          "利用可能なテキスト層 → 通常取り込み",
+          "テキスト層なし → 既存の言語別OCR",
+          "AES・暗号化読込エラー → ページ画像 → 非暗号化PDF → 強制OCR"
+        ],
+        "after": "原本は保持し、言語別OCRの既存ノードへ合流"
+      },
+      {
+        "id": "run_ocr",
+        "label": "言語別OCRを実行",
+        "stage": "ocr",
+        "resource_lane": "ingestion_cpu",
+        "status": "conditional",
+        "description": "未確定言語はページ画像をLLM判定して言語別OCRへ",
+        "role": "テキスト層がないPDFを永続ジョブとして登録し、指定言語に対応するOCRエンジンを実行してページJSONとUTF-8テキストを保存します。 復帰ジョブは画像化した複製にforce_ocrを指定し、既存の文字抽出へ戻さず新しいOCRを作成します。 文字情報だけで言語が未確定の場合、表紙・2ページ目・中間・末尾から最大4枚をLLMへ渡して本文の主言語を判定します。",
+        "target": "en・fr・ru・zh・ko・deはMistral OCR APIへ送信し、jaはローカルNDLOCR-Liteで処理します。",
+        "boundary": "既存の手動指定を保持します。LLMが読み取れる本文の対応言語を確信度0.90以上で特定した場合は自動でOCRへ進みます。低確信度・主言語未確定・未対応言語・判定エラーだけ確認待ちとし、同じジョブのLLM呼出しを繰り返しません。",
+        "safety": "ジョブIDはRun＋原本SHA-256で冪等。原本と複製のSHA-256、ページ数、来歴manifestを照合します。言語の既存手動指定を保持し、未確定時はneeds_languageで待機します。 LLMの言語・確信度・ページ別判定・画像SHA-256・モデル・根拠をジョブに保存し、判定中の人間の言語変更を上書きしません。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。",
+        "steps": [
+          "手動指定・文字情報を確認",
+          "未確定だけ最大4ページを画像化",
+          "LLMで本文の主言語を厳格JSON判定",
+          "確信度とページ別根拠を保存",
+          "対応言語かつ確信度0.90以上なら自動route",
+          "force_ocr・ページ数照合・通常監査へ合流"
+        ],
+        "order": 3
+      },
+      {
+        "order": 4,
+        "id": "register_asset",
+        "label": "SourceAssetを登録",
+        "stage": "extract",
+        "resource_lane": "ingestion_cpu",
+        "status": "guard",
+        "description": "内容ハッシュと所在をknowledge.dbへ登録",
+        "role": "SHA-256をキーに不変SourceAssetを登録し、現在のファイル所在をprimaryとして記録します。",
+        "target": "同一内容を重複Assetにせず、所在の変更をSourceLocationとして追跡します。",
+        "boundary": "既存primaryを解除してから現在の所在をprimaryへ切り替えます。",
+        "safety": "同一パスにあった旧Asset所在を利用不可にし、内容と所在を混同しません。",
+        "steps": [
+          "SHA-256照合",
+          "Asset upsert",
+          "旧所在無効化",
+          "primary所在登録"
+        ]
+      },
+      {
+        "order": 5,
+        "id": "extract_text",
+        "label": "本文抽出とOCR正規化",
+        "stage": "extract",
+        "resource_lane": "ingestion_cpu",
+        "status": "bounded",
+        "description": "形式別抽出・PDFレイアウト・OCR来歴の一括保存",
+        "role": "資料形式に応じて本文を抽出し、raw／normalized OCR Revisionと正規化成果物を作ります。",
+        "target": "PDFではページレイアウトと構造化HTML、その他形式ではページ本文を生成します。",
+        "boundary": "OCR更新をSAVEPOINTで囲み、Revision本文をブロックごとに再取得せず、成功後に成果物を確定します。 保存前にBEGIN IMMEDIATEで書込権を確保し、読み取り後の書込昇格による競合を避けます。",
+        "safety": "異なるSourceAssetへの来歴、未知のブロック・ページ、制約違反を拒否し、途中失敗はOCR更新全体を戻します。人間の保護ブロックを維持します。 人間が修正・保護したOCRは自動再OCRで置換しません。",
+        "steps": [
+          "形式別本文とPDFレイアウト",
+          "OCR正規化と監査",
+          "raw・normalized Revision",
+          "来歴参照を一括検証",
+          "来歴を一括保存",
+          "正規化成果物確定"
+        ]
+      },
+      {
+        "order": 6,
+        "id": "audit_ocr",
+        "label": "OCR完全性を監査",
+        "stage": "extract",
+        "resource_lane": "ingestion_cpu",
+        "status": "guard",
+        "description": "文字化け・ページ連続性・重大所見を判定",
+        "role": "抽出されたOCRの完全性とページ連続性を監査し、重大所見があれば人間確認へ送ります。",
+        "target": "OCR findingsをRunの明示的な品質ゲートとして扱います。",
+        "boundary": "監査が通過または解決されるまで文書構造の再構築へ進みません。",
+        "safety": "重大な欠落や破損を含むOCRから検索用Chunkを公開しません。",
+        "steps": [
+          "OCR読込",
+          "ページ連続性",
+          "文字品質",
+          "重大度判定",
+          "通過／要確認"
+        ]
+      },
+      {
+        "order": 7,
+        "id": "infer_structure",
+        "label": "文書構造・書誌を保存",
+        "stage": "structure",
+        "resource_lane": "ingestion_cpu",
+        "status": "guard",
+        "description": "文書構造と出典書誌を生成・保存",
+        "role": "監査済み本文からDocumentUnit、Page、SourceSpanを再構築し、原本の明示的な書誌情報をknowledge.dbへ保存します。",
+        "target": "PDFレイアウトブロックを優先し、なければ段落境界を使ってSpanを作ります。",
+        "boundary": "文書構造とSourceAsset・DocumentUnitの書誌リンクを同じトランザクションで確定します。",
+        "safety": "migration 0020・0021のChunk索引・OCR参照索引で関連行を検索します。原本の不明な書誌はpartialに保ち、SourceSpanが0件なら失敗させます。",
+        "steps": [
+          "旧構造削除",
+          "DocumentUnit",
+          "Page",
+          "SourceSpan",
+          "書誌情報・出所保存",
+          "整合性確認"
+        ]
+      },
+      {
+        "order": 8,
+        "id": "build_chunks",
+        "label": "検索用Chunkを生成",
+        "stage": "structure",
+        "resource_lane": "ingestion_cpu",
+        "status": "serial",
+        "description": "Token位置が空のPDFは文字層なし複製から再OCR",
+        "role": "SourceSpanのToken数、前後文脈、長文分割を先に計算し、選択した本文のToken判定結果を再利用します。 PDFのToken位置が空なら原本を複製し、全ページを画像化して既存文字層を除去し、既存の言語別OCRへ戻します。",
+        "target": "根拠Spanへの参照を保った検索単位をordinal順に生成します。",
+        "boundary": "計算中はこの工程の書き込みロックを取得せず、準備完了後にSAVEPOINTで旧Chunk削除と新Chunk一括挿入を原子的に確定します。",
+        "safety": "Token上限とSpan参照を維持し、挿入失敗時は旧Chunkを復元します。 原本と旧OCR Revisionを保持し、複製だけから文字層を除きます。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。",
+        "before": "原本のSourceSpanをToken計測（Unicode代替へ切替しない）",
+        "branches": [
+          "正常 → Chunk一括保存 → FTS5",
+          "Token位置なし → 文字層なし複製 → 強制OCR → 監査 → 構造再構築"
+        ],
+        "after": "再OCRから復帰してChunkを再計算。復帰済みPDFで再発したら循環せず失敗を記録"
+      },
+      {
+        "order": 9,
+        "id": "index_chunks",
+        "label": "SQLite FTS5へ公開",
+        "stage": "lexical",
+        "resource_lane": "ingestion_cpu",
+        "status": "serial",
+        "description": "行ID対応表で全件走査を避けてFTSを更新",
+        "role": "対象Assetの行IDを索引で検索し、対応する旧FTSレコードだけを主キーで削除します。新Chunk全文と行ID対応表を同時に保存します。",
+        "target": "単一資料をLexical検索で直ちに利用可能にします。",
+        "boundary": "旧FTSと行ID対応表の置換、Asset ready化をSAVEPOINTで原子的に確定します。FTSの非索引メタデータによる全件走査は行いません。",
+        "safety": "失敗時は旧FTSと行ID対応表をともに復元します。BGE-M3／FAISSは次回corpus_syncで更新します。",
+        "steps": [
+          "Chunk読込",
+          "索引で旧行ID取得",
+          "FTS主キーで削除",
+          "行ID対応表・FTS挿入",
+          "Asset readyを原子的に確定"
+        ]
+      }
+    ],
+    "recoveryRoutes": [
+      {
+        "cause": "sqlite_busy_or_locked",
+        "path": [
+          "rollback_and_close",
+          "fresh_connection",
+          "bounded_retry_4",
+          "same_item"
+        ]
+      },
+      {
+        "cause": "encrypted_pdf",
+        "path": [
+          "persist_job_identity",
+          "isolated_native_worker",
+          "reuse_validated_page_checkpoints",
+          "incremental_assembly_16",
+          "verify_and_publish",
+          "page_screenshots",
+          "unencrypted_image_pdf",
+          "force_ocr",
+          "audit",
+          "original_asset"
+        ]
+      },
+      {
+        "cause": "empty_embedding_offsets",
+        "path": [
+          "persist_job_identity",
+          "isolated_native_worker",
+          "reuse_validated_page_checkpoints",
+          "incremental_assembly_16",
+          "verify_and_publish",
+          "duplicate_pdf",
+          "remove_text_via_page_images",
+          "force_ocr",
+          "audit",
+          "rebuild_structure",
+          "build_chunks"
+        ]
+      },
+      {
+        "cause": "unresolved_ocr_language",
+        "path": [
+          "sample_page_images_max4",
+          "llm_body_language_identification",
+          "confidence_and_coverage_gate",
+          "language_engine_or_review"
+        ]
+      }
+    ],
+    "recoveryEdges": [
+      {
+        "source": "build_chunks",
+        "target": "run_ocr",
+        "condition": "conditional_success"
+      }
+    ],
+    "pdfRecoveryPreparation": {
+      "execution": "subprocess",
+      "checkpoint": "validated_page_pdf_and_sha256",
+      "assembly_batch_pages": 16,
+      "max_preparation_attempts": 4,
+      "no_progress_timeout_seconds": 300,
+      "parent_lifetime": "kill_child_on_parent_exit_windows_job",
+      "job_identity_committed_before_render": true,
+      "phases": [
+        "pdf_recovery_resume",
+        "pdf_recovery_render",
+        "pdf_recovery_save",
+        "pdf_recovery_validate",
+        "pdf_recovery_publish"
+      ]
+    },
+    "researchSourceHandoff": {
+      "name": "research_source_ingestion",
+      "version": "1",
+      "nodes": [
+        {
+          "id": "register_asset",
+          "title": "Register immutable SourceAsset",
+          "handler": "research.register_source",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "extract_text",
+          "title": "Extract text",
+          "handler": "ingestion.extract_text",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "audit_ocr",
+          "title": "Audit OCR integrity and page continuity",
+          "handler": "ingestion.audit_ocr",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "infer_structure",
+          "title": "Infer DocumentUnit and SourceSpan structure",
+          "handler": "ingestion.infer_structure",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "build_chunks",
+          "title": "Build tokenizer-measured retrieval chunks",
+          "handler": "ingestion.build_chunks",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "index_chunks",
+          "title": "Publish FTS5 retrieval chunks",
+          "handler": "ingestion.index_chunks",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "publish_research_index",
+          "title": "Publish semantic index for useful research sources",
+          "handler": "research.publish_index",
+          "resource_lane": "embedding_gpu",
+          "max_attempts": 2,
+          "join_from": [],
+          "join_generation_source": null
+        },
+        {
+          "id": "run_ocr",
+          "title": "Run Mistral or NDLOCR-Lite OCR",
+          "handler": "ingestion.run_ocr",
+          "resource_lane": "ingestion_cpu",
+          "max_attempts": 1,
+          "join_from": [],
+          "join_generation_source": null
+        }
+      ],
+      "edges": [
+        {
+          "from": "register_asset",
+          "to": "extract_text",
+          "condition": "success"
+        },
+        {
+          "from": "extract_text",
+          "to": "audit_ocr",
+          "condition": "success"
+        },
+        {
+          "from": "audit_ocr",
+          "to": "infer_structure",
+          "condition": "success"
+        },
+        {
+          "from": "infer_structure",
+          "to": "build_chunks",
+          "condition": "success"
+        },
+        {
+          "from": "build_chunks",
+          "to": "index_chunks",
+          "condition": "success"
+        },
+        {
+          "from": "index_chunks",
+          "to": "publish_research_index",
+          "condition": "success"
+        },
+        {
+          "from": "build_chunks",
+          "to": "run_ocr",
+          "condition": "conditional_success"
+        },
+        {
+          "from": "run_ocr",
+          "to": "register_asset",
+          "condition": "success"
+        }
+      ]
+    }
+  },
+  "stages": [
+    {
+      "id": "entry",
+      "label": "01 / 起動と事前検証",
+      "count": 2
+    },
+    {
+      "id": "discovery",
+      "label": "02 / 走査と資料判定",
+      "count": 4
+    },
+    {
+      "id": "ocr",
+      "label": "03 / 言語別OCR",
+      "count": 1
+    },
+    {
+      "id": "ingestion",
+      "label": "04 / 資料取り込み",
+      "count": 5
+    },
+    {
+      "id": "semantic",
+      "label": "05 / Semantic索引と完了",
+      "count": 4
+    }
+  ],
+  "mainPath": [
+    "request_corpus_sync",
+    "validate_corpus_run",
+    "scan_managed_sources",
+    "register_sync_batch",
+    "locate_and_hash_source",
+    "inspect_text_layer",
+    "run_language_routed_ocr",
+    "register_or_reuse_asset",
+    "extract_and_normalize_source",
+    "rebuild_document_structure",
+    "build_retrieval_chunks",
+    "update_lexical_index",
+    "calculate_corpus_signature",
+    "build_bge_m3_embeddings",
+    "publish_faiss_snapshot",
+    "complete_corpus_batch"
+  ],
+  "nodes": [
+    {
+      "order": 1,
+      "id": "request_corpus_sync",
+      "label": "同期Runを要求",
+      "stage": "entry",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "Knowledge Base画面から対象フォルダを指定",
+      "role": "利用者が既定のmanaged_sources＋import_staging、またはいずれかの配下フォルダを選び、corpus_sync Runを作成します。",
+      "target": "単一のroot_pathをRun入力として送信します。Corpus親フォルダの指定は許可した2箇所の合算を意味します。",
+      "boundary": "画面入力を確定してからAPIへ渡します。",
+      "safety": "UIは実行中RunとCorpus進捗を別々に追跡します。",
+      "steps": [
+        "対象フォルダ選択",
+        "Run作成要求",
+        "Run画面へ遷移"
+      ]
+    },
+    {
+      "order": 2,
+      "id": "validate_corpus_run",
+      "label": "パスと実行条件を検証",
+      "stage": "entry",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "範囲・依存関係・重複Runを事前確認",
+      "role": "要求されたパス、Semantic RAG依存関係、既存の実行中Corpus同期を検証します。",
+      "target": "Corpus親フォルダ、managed_sources、import_stagingとそれらの配下だけを許可し、同時に有効な同期Runを1件に制限します。",
+      "boundary": "検証完了後にだけRunとentry nodeを作成します。",
+      "safety": "範囲外パスは400、依存不足は503、重複Runは409で拒否します。",
+      "steps": [
+        "Semantic preflight",
+        "root_path正規化",
+        "範囲検証",
+        "重複Run検査",
+        "Run登録"
+      ]
+    },
+    {
+      "order": 3,
+      "id": "scan_managed_sources",
+      "label": "同期対象資料を再帰走査",
+      "stage": "discovery",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "対応形式のファイルを決定的順序で列挙",
+      "role": "既定ではmanaged_sourcesとimport_stagingを再帰走査し、対応拡張子のファイルを重複パスなしで収集します。個別フォルダの指定も保持します。",
+      "target": "実パスが選択された許可ルート内にある資料だけを対象とし、archived、oa_downloads、範囲外へのリンクは含めません。 0バイトPDFとmacOSの._付随ファイルも対象から除外します。",
+      "boundary": "列挙結果をパス順に並べてBatch登録へ渡します。",
+      "safety": "元ファイルは移動・変更しません。RTFなど未対応形式は収集せず、既存のSHA-256再利用とOCR復帰ルートを適用します。 空のPDFや付随ファイルをOCRへ送りません。",
+      "steps": [
+        "再帰走査",
+        "形式フィルター",
+        "実パス検証",
+        "パス順ソート"
+      ]
+    },
+    {
+      "order": 4,
+      "id": "register_sync_batch",
+      "label": "Batchと所在を登録",
+      "stage": "discovery",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "同期対象をstate.dbへ固定し所在を更新",
+      "role": "Corpus同期BatchとファイルごとのItemを登録し、既存SourceLocationの利用可能状態を更新します。",
+      "target": "Run状態はstate.db、資料の所在はknowledge.dbに分離して保存します。",
+      "boundary": "Batchと全Itemをひとつのトランザクションで登録した後、所在を更新します。",
+      "safety": "SQLite正本を先に確定します。既存Runへの明示的な追加はワーカー停止中に行い、既存Item IDと元Run入力を保持し、追加イベントと対象件数を記録して再開します。所在の更新は選択されたルート内だけに限定します。 既存Batchから不正な入力を除外する場合は元Itemと失敗履歴を保持し、スキップ理由・時刻・イベントを記録して正本の対象件数を更新します。",
+      "steps": [
+        "Batch ID採番",
+        "Item一括登録",
+        "status=ingesting",
+        "所在の生存確認"
+      ]
+    },
+    {
+      "order": 5,
+      "id": "locate_and_hash_source",
+      "label": "資料を検証・識別",
+      "stage": "discovery",
+      "resource_lane": "ingestion_cpu",
+      "status": "parallel",
+      "description": "原文2レーンと言語別OCR2レーンを並行稼働し、工程別の時間とCPUを記録",
+      "role": "未完了Itemを原文2レーンに分け、OCRが必要なPDFはMistralとNDLOCR-Liteの専用実行枠へ送ります。各レーンの同時実行は1件までとし、Markdown完成後に元のItemを原文取り込みキューへ戻します。PDF準備・抽出・OCR来歴・Chunk生成と保存の経過時間、処理スレッドのCPU時間を試行ごとに記録します。",
+      "target": "2 MiBを超えるPDFは同時に1件、それ以下のPDFとその他形式は別レーンで1件処理します。",
+      "boundary": "同じSHA-256を排他し、再利用条件を満たす資料は重いPDF解析を省いて所在と書誌を更新します。",
+      "safety": "同じSHA-256を排他。SQLiteのBUSY/LOCKEDだけを対象に、接続を閉じてロールバックし、新しい接続で最大4回・指数バックオフで再試行します。復帰履歴をイベントに保存し、上限到達後は失敗を記録します。 既存の失敗行は、OCR結果完成・PDF復帰対象・tokenizer依存の復旧・CP932・EPUB書式文字に限定して再投入します。HTML本文なしとZIP不正EPUBは自動再投入しません。",
+      "before": "未完了Itemを形式とサイズで振り分け",
+      "branches": [
+        "大きなPDF：同時に1件",
+        "小さなPDF・その他形式：同時に1件",
+        "言語判定は別枠、MistralとNDLOCR-Liteは各1件、完了後は元Itemを再投入"
+      ],
+      "after": "元Itemがreadyになるまで原文・OCR結果を合流",
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "id": "inspect_text_layer",
+      "label": "テキスト層を共通判定",
+      "stage": "discovery",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "通常抽出・OCR・暗号化PDF・レイアウト解析失敗を分岐",
+      "role": "再利用対象以外のPDFからページ寸法と位置付き本文を一度取得し、文字量で通常取り込みと言語別OCRへ振り分けます。 暗号化PDFの読込失敗では、全ページの表示画像を非暗号化・テキスト層なしPDFにまとめ、強制OCRジョブへ送ります。 レイアウト解析が失敗したPDFも、原本を保持したまま全ページを画像化して強制OCRへ送り、元Itemを同期キューへ戻します。 SourceSpanを再構築できなかったPDFと過去のレイアウト解析失敗も、原本を保持してページ画像からの強制OCRへ合流します。",
+      "target": "OCR不要資料を取り込みつつ、OCR対象を別レーンで実行します。",
+      "boundary": "取得済みページデータと原本SHA-256を同じItemの取り込みへ渡し、本文抽出を重複させません。",
+      "safety": "原本・複製のSHA-256とページ順・寸法を記録。複製は非暗号化かつ文字層ゼロを確認し、表示パスワードが必要なら明示的なエラーにします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。",
+      "before": "原本SHA-256とPDFの読込・文字品質を確認",
+      "branches": [
+        "利用可能なテキスト層 → 通常取り込み",
+        "テキスト層なし → 既存の言語別OCR",
+        "AES・暗号化読込エラー → ページ画像 → 非暗号化PDF → 強制OCR",
+        "レイアウト解析失敗 → ページ画像 → 文字層なしPDF → 強制OCR → 元Item再投入"
+      ],
+      "after": "原本を保持し、OCR用ジョブを並行レーンへ送ります",
+      "order": 6,
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "id": "run_language_routed_ocr",
+      "label": "言語別OCRジョブを実行",
+      "stage": "ocr",
+      "resource_lane": "ingestion_cpu",
+      "status": "parallel",
+      "description": "未確定言語を独立した現在は最大3件の画像LLM枠で並行判定し、Mistral・NDLOCR-Liteと通常取り込みも別枠で進めます",
+      "role": "OCR対象をMistral APIとNDLOCR-Liteの2レーンで各1件ずつ並行処理します。en・fr・ru・zh・ko・deはMistral API、jaはNDLOCR-Liteを使用します。各レーン内は順次処理し、OCR結果をページ見出し付きMarkdownとページ単位JSONに保存して元のCorpus Itemへ戻します。OCRの入力検証・エンジン実行・出力保存の経過時間とCPU時間を試行ごとに記録します。",
+      "target": "言語判定中も、確定済みジョブをOCR専用枠で処理し、元Itemの取り込みへ戻します。 WindowsではNDLOCR-LiteのPythonエントリポイントを直接起動し、起動用exeの余分な子プロセスを省いてOCR本体のCPU時間を計測します。",
+      "boundary": "同じRunとItem IDを維持します。429は再試行時刻を保存して同じジョブで自動再試行します。低確信度・未対応言語など判断不能な資料だけ個別に確認待ちとし、ほかの資料を止めません。",
+      "safety": "ジョブIDはRun＋原本SHA-256で冪等。原本と複製のSHA-256、ページ数、来歴manifestを照合します。言語の既存手動指定を保持し、未確定時はneeds_languageで待機します。 LLMの言語・確信度・ページ別判定・画像SHA-256・モデル・根拠をジョブに保存し、判定中の人間の言語変更を上書きしません。 OCR済みMarkdownは原本の代わりの新規Sourceにせず、元のPDFとジョブIDにひも付けます。再起動時はOCRジョブとItem状態から未完了のキューを再構成し、CP932のログ表示で失敗したジョブは修正後に一度だけ再投入します。ファイル名をコンソールに出すときは表示可能な文字へエスケープします。 OCR済みなのに失敗したItemは同じジョブのMarkdownとページJSONから取り込み直し、OCRを重複実行しません。PDF準備時のWinError 32は保存を短く再試行し、失敗した準備ジョブは同じIDで復帰します。 429の応答は人間確認待ちに固定せず、retry_afterと試行回数をジョブに保存します。 NDLOCR-LiteはAPI用のCPUを確保するため、優先度とCPU使用枠を制限した直接子プロセスで実行します。PDFメタデータの読取失敗はOCR本文の取り込みを中断しません。 長大なOCR本文の段落分割は線形走査で処理し、APIの応答を塞ぐ正規表現のバックトラックを避けます。通常取り込みのPDF解析・OCR・言語判定はAPIとは別の子プロセスで実行し、サービス終了時はWindows Job Objectで子プロセスも終了します。大容量PDFのMistral OCRは最大20ページ・20MiBの範囲に分割し、原本SHAとモデルに紐付くページ群の結果を保存して再開します。NDLOCR-LiteのXML解析失敗時は同じ原本をMistral OCRへ代替します。",
+      "steps": [
+        "未確定言語を2件同時に判定開始し、成功時は現在は最大3件まで増枠",
+        "429応答時だけ並列数を減らし、再試行時刻と最大15分のバックオフを適用",
+        "確定済みジョブをMistralとNDLOCR-Liteで各1件ずつ並行処理",
+        "MarkdownとページJSONを元Itemへ戻す",
+        "NDLOCRのJSON専用実行は文字入りPDFを生成せず、ページJSONを受け取る"
+      ],
+      "order": 7,
+      "before": "OCR対象Itemをジョブに登録",
+      "branches": [
+        "原文2レーンは次の資料へ進む",
+        "MistralとNDLOCR-Liteの2レーンでMarkdownとページJSONを生成"
+      ],
+      "after": "同じItemを同期キューへ戻しreadyまで処理",
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "order": 8,
+      "id": "register_or_reuse_asset",
+      "label": "Asset登録または再利用",
+      "stage": "ingestion",
+      "resource_lane": "ingestion_cpu",
+      "status": "conditional",
+      "description": "SHA・ready状態・必要成果物を確認して再利用 共有OCRが完了した同一SHAの別ファイルも検証してreusedへ反映します。",
+      "role": "原文のSHA-256と、OCR済みItemの原本PDFを同一SourceAssetとして照合します。Markdownは派生成果物として保持します。",
+      "target": "同一内容を重複登録せず、移動や複数所在はSourceLocationとして管理します。",
+      "boundary": "条件を満たした資料の所在と書誌を更新し、成果物のない資料は再構築へ進めます。",
+      "safety": "ready表示だけで成果物欠落を見落とさず、同一パスの旧Asset所在を無効化して現在の所在をprimaryにします。",
+      "before": "SHA-256照合",
+      "branches": [
+        "既存ready → 再利用",
+        "新規・変更 → 再構築"
+      ],
+      "after": "有効なSourceAssetを確定",
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "order": 9,
+      "id": "extract_and_normalize_source",
+      "label": "本文抽出とOCR正規化",
+      "stage": "ingestion",
+      "resource_lane": "ingestion_cpu",
+      "status": "bounded",
+      "description": "PDF解析結果を共用し、OCR来歴を一括保存",
+      "role": "取得済みPDF座標またはOCRのページJSONからraw・normalized OCR Revisionを構築します。OCR Markdownも同じジョブに保存し、元PDFとページ来歴を保持します。 日本語TXTはUTF-8判定後にCP932を判定し、元の文字を保って取り込みます。",
+      "target": "ページ単位のraw OCRとnormalized OCRを保存し、監査可能なRevisionを構築します。",
+      "boundary": "OCR更新をSAVEPOINTで囲み、Revision本文をブロックごとに再取得せず、成功後に成果物を確定します。 保存前にBEGIN IMMEDIATEで書込権を確保し、読み取り後の書込昇格による競合を避けます。",
+      "safety": "異なるSourceAssetへの来歴、未知のブロック・ページ、制約違反を拒否し、途中失敗はOCR更新全体を戻します。人間の保護ブロックを維持します。 人間が修正・保護したOCRは自動再OCRで置換しません。",
+      "steps": [
+        "取得済みPDF座標または形式別本文",
+        "OCR正規化と監査",
+        "raw・normalized Revision",
+        "資料IDと参照先を一度検証",
+        "来歴を一括保存",
+        "構造化HTML・JSON確定"
+      ],
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "order": 10,
+      "id": "rebuild_document_structure",
+      "label": "文書構造・書誌を保存",
+      "stage": "ingestion",
+      "resource_lane": "ingestion_cpu",
+      "status": "guard",
+      "description": "参照索引を使い、対象文書の構造と書誌を置換",
+      "role": "既存文書構造を置換し、SourceSpanと資料原本の明示的な書誌情報をknowledge.dbへ保存します。 PDFでSourceSpanが作れない場合は元Itemをページ画像のOCR復帰経路へ戻します。",
+      "target": "PDFレイアウトブロックを優先し、それ以外は段落分割からSpanを生成します。",
+      "boundary": "旧構造削除、新構造作成、SourceAsset・DocumentUnitの書誌リンクを同じトランザクションで確定します。",
+      "safety": "migration 0020・0021のChunk索引・OCR参照索引で関連行を検索します。原本の不明な書誌はpartialに保ち、SourceSpanが0件なら失敗させます。 PDFの書誌メタデータが暗号化・形式不正などで読めない場合、本文取り込みは継続し、ファイル名を出典名の代替にします。",
+      "steps": [
+        "旧構造集計",
+        "旧DocumentUnit削除",
+        "DocumentUnit作成",
+        "Page作成",
+        "SourceSpan作成",
+        "書誌情報・出所保存",
+        "整合性確認"
+      ],
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "order": 11,
+      "id": "build_retrieval_chunks",
+      "label": "検索用Chunkを生成",
+      "stage": "ingestion",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "Token位置が空のPDFは文字層なし複製から再OCR 分割後の本文を再トークン化して上限を保証し、文字範囲の重複と欠落を防ぎます。",
+      "role": "SourceSpanのToken数、前後文脈、長文分割を先に計算し、選択した本文のToken判定結果を再利用します。 PDFのToken位置が空なら原本を複製し、全ページを画像化して既存文字層を除去し、既存の言語別OCRへ戻します。 EPUBにあるゼロ幅書式文字だけのSourceSpanは保持しつつ、tokenizerに位置情報がないChunkだけを作らず、本文のChunkは埋め込み用tokenizerで作ります。",
+      "target": "各Spanを原子的な根拠として保ちながら検索時に有用な前後文脈を付与します。",
+      "boundary": "計算中はこの工程の書き込みロックを取得せず、準備完了後にSAVEPOINTで旧Chunk削除と新Chunk一括挿入を原子的に確定します。",
+      "safety": "Token上限とSpan参照を維持し、挿入失敗時は旧Chunkを復元します。 原本と旧OCR Revisionを保持し、複製だけから文字層を除きます。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 並行レーンの初回tokenizer読み込みは直列化し、依存関係の一時的な読み込み競合を避けます。",
+      "runtime_node": "ingest_ready_sources",
+      "before": "原本のSourceSpanをToken計測（Unicode代替へ切替しない）",
+      "branches": [
+        "正常 → Chunk一括保存 → FTS5",
+        "Token位置なし → 文字層なし複製 → 強制OCR → 監査 → 構造再構築"
+      ],
+      "after": "再OCRから復帰してChunkを再計算。復帰済みPDFで再発したら循環せず失敗を記録"
+    },
+    {
+      "order": 12,
+      "id": "update_lexical_index",
+      "label": "Lexical索引を更新",
+      "stage": "ingestion",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "行ID対応表で全件走査を避けてFTSを更新",
+      "role": "対象Assetの行IDを索引で検索し、対応する旧FTSレコードだけを主キーで削除します。新Chunk全文と行ID対応表を同時に保存します。",
+      "target": "完全一致・語彙検索に使うLexical RAGを資料単位で更新します。",
+      "boundary": "旧FTSと行ID対応表の置換、Asset ready化をSAVEPOINTで原子的に確定します。FTSの非索引メタデータによる全件走査は行いません。",
+      "safety": "失敗時は旧FTSと行ID対応表をともに復元します。ItemをreadyまたはreusedとしてBatchへ記録します。",
+      "steps": [
+        "Chunk読込",
+        "索引で旧行ID取得",
+        "FTS主キーで削除",
+        "行ID対応表・FTS挿入",
+        "Asset readyを原子的に確定"
+      ],
+      "runtime_node": "ingest_ready_sources"
+    },
+    {
+      "order": 13,
+      "id": "calculate_corpus_signature",
+      "label": "Corpus署名を確定",
+      "stage": "semantic",
+      "resource_lane": "embedding_gpu",
+      "status": "guard",
+      "description": "SourceSpanを検索用に集約し、署名と容量を確認 既存の長大ChunkはSourceSpan原文から重複なく検索用区間へ再分割します。検査済みグループ数を記録します。 画面には検査済みグループ数、経過時間、直近速度を表示します。資料標本から推計した総数・割合・検査残時間は概算と明示します。",
+      "role": "原本Chunkを保ったままSourceSpanを約512トークンの検索用グループへ集約し、出典Spanの対応を記録します。",
+      "target": "検索用グループの署名・件数を求め、D上の作業容量と空きRAMを事前確認します。",
+      "boundary": "文書の境界を越えず、同一署名の完了索引は再利用します。",
+      "safety": "容量不足なら旧索引を保持して待機し、巨大なFlat索引を作り始めません。",
+      "steps": [
+        "検索用グループ集約",
+        "本文SHA-256",
+        "署名・件数・容量確認",
+        "再開Build照合",
+        "トークン化されない制御・書式文字だけの区間は原文を保持して検索対象から除く",
+        "明示指示による失敗資料の保留後、有効対象の準備完了を確認して同じRunを新attemptで再開"
+      ]
+    },
+    {
+      "order": 14,
+      "id": "build_bge_m3_embeddings",
+      "label": "BGE-M3埋め込みを構築",
+      "stage": "semantic",
+      "resource_lane": "embedding_gpu",
+      "status": "bounded",
+      "description": "GPUバッチを再開可能な単位で処理しDへ保存",
+      "role": "検索用グループの既存キャッシュを再利用し、不足するBGE-M3ベクトルを生成してD上のFP32ファイルへ順に保存します。",
+      "target": "GPU所有権をバッチ境界で解放し、他のローカルLLM処理と資源を共有します。",
+      "boundary": "256件ごとにベクトルを永続化してからSQLiteの対応表とチェックポイントを確定します。",
+      "safety": "再開時は未コミットのファイル末尾だけを切り戻し、原本ChunkとSourceSpanを保持します。",
+      "before": "検索用グループをバッチ計画",
+      "branches": [
+        "cache hit",
+        "GPU encode",
+        "GPU encode",
+        "…"
+      ],
+      "after": "D上の順序付きFP32ベクトル"
+    },
+    {
+      "order": 15,
+      "id": "publish_faiss_snapshot",
+      "label": "FAISS snapshotを公開",
+      "stage": "semantic",
+      "resource_lane": "embedding_gpu",
+      "status": "guard",
+      "description": "圧縮索引を精度確認後に原子的に公開",
+      "role": "D上のベクトルからメモリ内に収まるIVF-PQ索引を構築し、正確検索との差を確認して公開します。",
+      "target": "検索側が参照できるVectorIndexVersionとChunk順序を確定します。",
+      "boundary": "D上の一時ファイルを検証後に版管理された公開先へ切り替えます。",
+      "safety": "品質・容量ガードに通らなければ旧索引を保持し、未完成版を検索へ公開しません。",
+      "steps": [
+        "IVF-PQ構築",
+        "正確検索との小規模比較",
+        "件数・次元検証",
+        "snapshot保存",
+        "Version ready",
+        "current切替"
+      ]
+    },
+    {
+      "order": 16,
+      "id": "complete_corpus_batch",
+      "label": "Batch完了を確定",
+      "stage": "semantic",
+      "resource_lane": "ingestion_cpu",
+      "status": "serial",
+      "description": "Canonical状態を保存し完了イベントを通知",
+      "role": "Corpus同期Batchをcompletedへ遷移し、Semantic indexの結果をRunコンテキストへ返します。",
+      "target": "ready・reused・OCR required・failedの集計とEmbedding指標を最終状態として残します。",
+      "boundary": "state.dbのBatch完了を確定してからcorpus.index.completedを通知します。",
+      "safety": "SSEは通知専用とし、再読込時はSQLite snapshotから状態を復元します。",
+      "steps": [
+        "Batch completed",
+        "完了イベント",
+        "Run node完了",
+        "UI snapshot再取得"
+      ]
+    }
+  ],
+  "recoveryRoutes": [
+    {
+      "cause": "sqlite_busy_or_locked",
+      "path": [
+        "rollback_and_close",
+        "fresh_connection",
+        "bounded_retry_4",
+        "same_item"
+      ]
+    },
+    {
+      "cause": "encrypted_pdf",
+      "path": [
+        "persist_job_identity",
+        "isolated_native_worker",
+        "reuse_validated_page_checkpoints",
+        "incremental_assembly_16",
+        "verify_and_publish",
+        "page_screenshots",
+        "unencrypted_image_pdf",
+        "force_ocr",
+        "audit",
+        "original_asset"
+      ]
+    },
+    {
+      "cause": "layout_analysis_failed",
+      "path": [
+        "resume_historical_failed_item",
+        "persist_job_identity",
+        "isolated_native_worker",
+        "reuse_validated_page_checkpoints",
+        "incremental_assembly_16",
+        "verify_and_publish",
+        "page_images",
+        "image_only_pdf",
+        "force_ocr",
+        "same_item_queue",
+        "audit",
+        "original_asset"
+      ]
+    },
+    {
+      "cause": "empty_embedding_offsets",
+      "path": [
+        "persist_job_identity",
+        "isolated_native_worker",
+        "reuse_validated_page_checkpoints",
+        "incremental_assembly_16",
+        "verify_and_publish",
+        "duplicate_pdf",
+        "remove_text_via_page_images",
+        "force_ocr",
+        "audit",
+        "rebuild_structure",
+        "build_chunks"
+      ]
+    },
+    {
+      "cause": "unresolved_ocr_language",
+      "path": [
+        "sample_page_images_max4",
+        "independent_language_lane",
+        "llm_body_language_identification",
+        "confidence_and_coverage_gate",
+        "language_engine_or_review"
+      ]
+    },
+    {
+      "cause": "ocr_completed_during_ingestion",
+      "path": [
+        "resume_failed_item_with_completed_job",
+        "ocr_output_md_and_page_json",
+        "same_item_discovered",
+        "source_lane_queue",
+        "ingest_ocr_pages",
+        "ready_or_reused"
+      ]
+    },
+    {
+      "cause": "llm_language_rate_limit",
+      "path": [
+        "persist_retry_after",
+        "reduce_language_concurrency",
+        "temporary_global_cooldown",
+        "exponential_backoff_up_to_15m",
+        "same_job",
+        "ocr_lane"
+      ]
+    }
+  ],
+  "pdfRecoveryPreparation": {
+    "execution": "subprocess",
+    "checkpoint": "validated_page_pdf_and_sha256",
+    "assembly_batch_pages": 16,
+    "max_preparation_attempts": 4,
+    "no_progress_timeout_seconds": 300,
+    "parent_lifetime": "kill_child_on_parent_exit_windows_job",
+    "job_identity_committed_before_render": true,
+    "phases": [
+      "pdf_recovery_resume",
+      "pdf_recovery_render",
+      "pdf_recovery_save",
+      "pdf_recovery_validate",
+      "pdf_recovery_publish"
+    ]
+  },
+  "corpusSourceScope": {
+    "default_directories": [
+      "managed_sources",
+      "import_staging"
+    ],
+    "excluded_siblings": [
+      "archived",
+      "oa_downloads"
+    ],
+    "original_files": "preserved_in_place",
+    "supported_formats_only": true,
+    "active_batch_expansion": "explicit_while_workers_stopped",
+    "excluded_unusable_files": [
+      "zero_byte_pdf",
+      "appledouble_sidecar"
+    ],
+    "active_batch_skip": "preserve_item_and_error_exclude_from_count"
+  },
+  "ocrReturnQueue": {
+    "runtime_node": "ingest_ready_sources",
+    "source_lanes": 2,
+    "ocr_lanes": 1,
+    "artifact": "page-marked Markdown plus page JSON",
+    "requeue_status": "discovered",
+    "identity": "same corpus_sync_item and original PDF source",
+    "final_index_gate": "run_ocr_jobs and ingest_ocr_outputs complete before bounded scalable build_semantic_index",
+    "semantic_index_plan": "source-span-preserving retrieval groups, D-drive FP32 vectors, capacity guard, IVF-PQ with exact-search quality gate",
+    "failed_item_resume": "completed OCR job reuses the same Item and original Asset without repeating OCR",
+    "rate_limit_backoff_max_seconds": 900,
+    "language_lanes_initial": 2,
+    "language_lanes_max": 3,
+    "language_429_policy": "reduce_concurrency_and_pause_until_retry_after",
+    "language_success_policy": "increase_concurrency_up_to_max",
+    "language_lanes_max_setting": "min(4, worker.codex_max_concurrency)",
+    "ndlocr_json_only": "skip_text_layer_pdf_generation_and_consume_page_json"
+  },
+  "retrievalInputRepair": {
+    "version": 2,
+    "hard_max_tokens": 1024,
+    "partition": "contiguous_character_ranges_retokenized",
+    "canonical_sources_immutable": true,
+    "historical_slices": "reconstruct_once_from_source_span",
+    "mapping": "multiple_vector_keys_per_canonical_chunk",
+    "shared_ocr": "verify_sha256_then_reuse_all_matching_items",
+    "resume": "same_run_index_only_preserve_failed_attempts",
+    "empty_token_control_spans": "preserve_canonical_span_skip_search_only_Cc_Cf_whitespace"
+  },
+  "indexProgressDisplay": {
+    "preflight_actual": "checked_groups",
+    "total_estimate": "document_cluster_sample_ratio",
+    "estimate_is_exact": false,
+    "rate_window_seconds": 600,
+    "eta_scope": "preflight_only",
+    "no_service_restart_required": true
+  },
+  "operatorCloseout": {
+    "authorization": "explicit_user_instruction",
+    "recover": "complete_selected_OCR_and_ingest_same_item",
+    "defer": "preserve_failed_item_and_error_set_skip_reason_user_deferred_this_run",
+    "counts": "exclude_deferred_items_from_effective_batch_total",
+    "resume": "same_run_new_index_attempt_after_all_effective_items_ready_or_reused",
+    "prior_guard_attempt": "retain_output_and_events_mark_superseded_cancelled"
+  },
+  "researchSourceHandoff": {
+    "name": "research_source_ingestion",
+    "version": "1",
+    "nodes": [
+      {
+        "id": "register_asset",
+        "title": "Register immutable SourceAsset",
+        "handler": "research.register_source",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "extract_text",
+        "title": "Extract text",
+        "handler": "ingestion.extract_text",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "audit_ocr",
+        "title": "Audit OCR integrity and page continuity",
+        "handler": "ingestion.audit_ocr",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "infer_structure",
+        "title": "Infer DocumentUnit and SourceSpan structure",
+        "handler": "ingestion.infer_structure",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "build_chunks",
+        "title": "Build tokenizer-measured retrieval chunks",
+        "handler": "ingestion.build_chunks",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "index_chunks",
+        "title": "Publish FTS5 retrieval chunks",
+        "handler": "ingestion.index_chunks",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "publish_research_index",
+        "title": "Publish semantic index for useful research sources",
+        "handler": "research.publish_index",
+        "resource_lane": "embedding_gpu",
+        "max_attempts": 2,
+        "join_from": [],
+        "join_generation_source": null
+      },
+      {
+        "id": "run_ocr",
+        "title": "Run Mistral or NDLOCR-Lite OCR",
+        "handler": "ingestion.run_ocr",
+        "resource_lane": "ingestion_cpu",
+        "max_attempts": 1,
+        "join_from": [],
+        "join_generation_source": null
+      }
+    ],
+    "edges": [
+      {
+        "from": "register_asset",
+        "to": "extract_text",
+        "condition": "success"
+      },
+      {
+        "from": "extract_text",
+        "to": "audit_ocr",
+        "condition": "success"
+      },
+      {
+        "from": "audit_ocr",
+        "to": "infer_structure",
+        "condition": "success"
+      },
+      {
+        "from": "infer_structure",
+        "to": "build_chunks",
+        "condition": "success"
+      },
+      {
+        "from": "build_chunks",
+        "to": "index_chunks",
+        "condition": "success"
+      },
+      {
+        "from": "index_chunks",
+        "to": "publish_research_index",
+        "condition": "success"
+      },
+      {
+        "from": "build_chunks",
+        "to": "run_ocr",
+        "condition": "conditional_success"
+      },
+      {
+        "from": "run_ocr",
+        "to": "register_asset",
+        "condition": "success"
+      }
+    ]
+  }
+}

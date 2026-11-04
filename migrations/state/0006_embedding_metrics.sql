@@ -1,0 +1,9 @@
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_average_tokens_per_chunk REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_tokens_per_second REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_tokenization_seconds REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_gpu_inference_seconds REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_db_write_seconds REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_gpu_utilization_percent REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_vram_used_mib REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_vram_total_mib REAL;
+ALTER TABLE corpus_sync_batches ADD COLUMN embedding_cpu_utilization_percent REAL;

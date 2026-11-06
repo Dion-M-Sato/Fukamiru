@@ -43,7 +43,8 @@ def test_v32_diagram_serves_current_academic_search_policy() -> None:
     assert [n["id"] for n in diagram_handoff["nodes"]] == [n.id for n in handoff.nodes]
     assert [(e["from"], e["to"]) for e in diagram_handoff["edges"]] == [
         (e.source, e.target) for e in handoff.edges]
-    assert "RustXNG" in payload["research_policy"]["bounded_research_retry"]["summary"]
+    retry = payload["research_policy"]["bounded_research_retry"]["summary"]
+    assert "RustXNG v0.30.0（Standard）" in retry
     support = payload["research_policy"]["validate_evidence_support"]["summary"]
     assert "NDLOCR-Lite／Mistral" in support
 

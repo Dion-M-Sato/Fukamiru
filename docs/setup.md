@@ -41,6 +41,7 @@ Windowsで手動実行する場合は `.venv\Scripts\Activate.ps1` で仮想環�
 | 機能 | 設定 |
 | --- | --- |
 | 翻訳・原稿生成 | Codex CLIを準備し、`codex login status` で認証を確認 |
+| 原稿生成の補助Web検索（任意） | RustXNG v0.30.0 の Standard プロファイル。[導入と起動](specification/research-source-handoff.md) |
 | 日本語解析 | `python -m pip install -e '.[japanese]'` |
 | ローカル推敲 | `llama-server` とGGUFを準備し、`models.*.path` を設定 |
 | 意味検索 | `python -m pip install -e '.[rag]'`、互換性のあるPyTorch、準備済みモデルキャッシュ |

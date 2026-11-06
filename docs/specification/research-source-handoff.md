@@ -5,8 +5,28 @@ V32は先に既存RAGの本文を根拠検査し、未解決の命題だけを�
 公式APIの追加検索と根拠検査を行っても不足するテーマに、RustXNGの一般Web検索を補助的に使う。
 短い検索語、プランナーの同義語・対抗概念、日本語と英語を使い、一つの検索語に全論点を詰め込まない。
 
-RustXNGは別のローカルサービスとして起動し、`translation.rustxng_url`で接続する。
-既定は`http://127.0.0.1:29483`。起動例は`rustxng --bind 127.0.0.1 --port 29483`。
+補助検索には [RustXNG v0.30.0](https://github.com/sahenjp/RustXNG/releases/tag/v0.30.0) の
+Standard プロファイルを使う。公式リリースから環境に合うバイナリを取得し、配布元の
+SHA-256 を照合する。`rustxng --version` で `0.30.0` を確認して起動する。
+
+```sh
+rustxng --profile standard --bind 127.0.0.1 --port 29483
+```
+
+Fukamiru は別プロセスの RustXNG に `translation.rustxng_url` で接続する。
+既定は `http://127.0.0.1:29483`。既存の RustXNG 設定を再利用する場合は、
+Standard の検索エンジン設定を上書きする `[[engines]]` を除き、必要な設定だけを残す。
+上流がタイムアウトする環境では、次の設定を `rustxng --profile standard --config standard.toml`
+に渡すと、Standard の検索先を保ったまま待ち時間を調整できる。
+
+```toml
+[search]
+timeout_limit = 8.0
+
+[outgoing]
+request_timeout = 8.0
+```
+
 端末固有の設定は無視対象の`config/local.toml`に置く。
 補助検索は`research_web_enabled`、PDF画像OCRは`research_pdf_ocr_enabled`で切り替える。
 プロキシ不通は診断記録に残し、既存DBから取得済みの根拠検査を取り消さない。

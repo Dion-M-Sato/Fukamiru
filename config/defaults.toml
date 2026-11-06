@@ -190,7 +190,7 @@ academic_research_reading_seconds = 180
 academic_research_ocr_pages = 3
 academic_research_ocr_seconds = 60
 # Auxiliary discovery after local evidence and the official database search.
-# RustXNG runs as a separate loopback service; machine overrides belong in local.toml.
+# RustXNG v0.30.0 runs separately on loopback with --profile standard.
 research_web_enabled = true
 rustxng_url = "http://127.0.0.1:29483"
 research_pdf_ocr_enabled = true

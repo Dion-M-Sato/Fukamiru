@@ -32,3 +32,11 @@ External providers are simulated with fictional responses or a loopback HTTP ser
 Live external inference, search, OCR services and local model quality are not certified by these checks.
 HTML structure, shared styles, citation formatting and unchanged canonical content are checked;
 visual comparison in a real browser remains manual.
+
+## RustXNG v0.30.0 Standard
+
+- The public-source client returned four HTTPS candidates for a public example query
+  through a loopback RustXNG v0.30.0 service running with `--profile standard`.
+- The workflow diagram generator reproduced the checked-in data for the UI-linked diagram.
+- The Python suite passed all 1,931 tests. All 56 UI tests passed, along with Ruff,
+  the Git whitespace check, and the publication guard.

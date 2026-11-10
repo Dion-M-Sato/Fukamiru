@@ -665,6 +665,40 @@ def test_visible_citation_units_normalizes_japanese_bibliographic_punctuation() 
     assert placement["sentence"] == text
 
 
+@pytest.mark.parametrize("name", [
+    "アレクサ・J.ノール", "アレクサ・Ｊ．ノール", "アレクサ・J. ノール",
+])
+def test_visible_citation_units_keeps_another_authors_initial_inside_the_sentence(
+    name: str,
+) -> None:
+    sentence = f"戸森『展示の比較』と{name}『観察の記録』を展示の比較に用いる。"
+    text = "前の文。" + sentence + "次の文。"
+    reference = {"title": "展示の比較", "authors": ["戸森"]}
+    placement = EvidenceFootnotePlanner.visible_citation_units(text, [reference], reference)
+    assert placement is not None
+    assert placement["sentence"] == sentence
+    assert placement["sentence_start"] == len("前の文。")
+    assert placement["clause"] == sentence
+    assert text[placement["sentence_start"]:].startswith(placement["sentence"])
+
+
+def test_visible_citation_units_preserves_registered_english_middle_initials() -> None:
+    reference = {"title": "Imaginary Exhibits", "authors": ["Rowan T. Vale"]}
+    sentence = "Rowan T. Vale discusses fictional exhibitions in Imaginary Exhibits."
+    placement = EvidenceFootnotePlanner.visible_citation_units(sentence, [reference], reference)
+    assert placement is not None
+    assert placement["sentence"] == sentence
+
+
+def test_visible_citation_units_does_not_merge_an_ordinary_period_ending() -> None:
+    reference = {"title": "仮想展示論", "authors": ["戸森"]}
+    sentence = "戸森『仮想展示論』を参照した."
+    text = sentence + "次の文は別の主張である。"
+    placement = EvidenceFootnotePlanner.visible_citation_units(text, [reference], reference)
+    assert placement is not None
+    assert placement["sentence"] == sentence
+
+
 def test_visible_citation_units_rejects_repeated_normalized_source_anchor() -> None:
     evidence = {
         "id": "E-SENNETT",

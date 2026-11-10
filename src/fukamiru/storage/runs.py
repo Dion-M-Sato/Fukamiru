@@ -13,8 +13,19 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fukamiru.authoring.evidence_contracts import (
+    EvidenceUse,
     FixedAssets,
+    compile_draft_evidence,
+    draft_source_use_constraints,
+    evidence_use_identity_hash,
     project_argument_evidence_sources,
+    refresh_draft_evidence_identity,
+)
+from fukamiru.authoring.generation import (
+    recover_empty_citation_projection,
+    recover_stale_candidate_projection,
+    recover_submission_revalidation,
+    rendered_qualification_recovery,
 )
 from fukamiru.authoring.policy import authoring_policy
 from fukamiru.bibliographic_metadata import reconcile_verified_publisher_metadata
@@ -22,6 +33,7 @@ from fukamiru.errors import FukamiruError
 from fukamiru.storage.events import EventRepository
 from fukamiru.storage.llm_observations import LLMObservationRepository
 from fukamiru.storage.payloads import PayloadStore
+from fukamiru.storage.proofreading_generations import checkpoint_recovery
 from fukamiru.storage.recovery_contracts import (
     anchor_error_kind,
     recovery_available,
@@ -41,7 +53,41 @@ def _json_dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def _v31_fixed_source_lineage_is_repairable(error_message: str, unpacked: dict[str, Any]) -> bool:
+def _v31_stale_draft_evidence_baseline(
+    context: dict[str, Any], producer_input: dict[str, Any], producer_output: dict[str, Any],
+) -> list[EvidenceUse] | None:
+    """Recognize an old baseline inherited by an otherwise intact new draft."""
+    if not context.get("evidence_uses") or not context.get("draft_sections"):
+        return None
+    if any(context.get(key) != producer_output.get(key) for key in (
+        "proposed_html", "draft_sections", "evidence_uses", "fixed_assets",
+        "draft_attempt", "evidence_identity_hash",
+    )) or context.get("fixed_assets") != producer_input.get("fixed_assets"):
+        return None
+    try:
+        if int(context.get("draft_attempt", 0)) <= int(producer_input.get("draft_attempt", 0)):
+            return None
+        old_uses = [EvidenceUse.model_validate(item)
+                    for item in producer_input.get("evidence_uses") or []]
+        old_identity = evidence_use_identity_hash(old_uses)
+        validation = dict(producer_input.get("proofreading_evidence_identity_validation") or {})
+        if (not old_uses or context.get("evidence_identity_hash") != old_identity
+                or producer_input.get("evidence_identity_hash") != old_identity
+                or validation.get("passed") is not True
+                or validation.get("identity_hash") != old_identity):
+            return None
+        _, compiled, _, _ = compile_draft_evidence(context, context["draft_sections"])
+    except (FukamiruError, ValueError, KeyError, TypeError):
+        return None
+    if ([item.model_dump(mode="json") for item in compiled] != context["evidence_uses"]
+            or evidence_use_identity_hash(compiled) == old_identity):
+        return None
+    return compiled
+
+
+def _v31_fixed_source_lineage_is_repairable(
+    error_message: str, unpacked: dict[str, Any]
+) -> bool:
     match = re.fullmatch(
         r"draft evidence ([A-Za-z0-9_-]+) references unknown or disallowed "
         r"fixed source IDs: ([A-Za-z0-9:_-]+(?:, [A-Za-z0-9:_-]+)*)",
@@ -1783,7 +1829,9 @@ class RunRepository:
             self.connection.rollback()
             raise
 
-    def replay_failed_authoring_node(self, run_id: str) -> dict[str, Any]:
+    def replay_failed_authoring_node(
+        self, run_id: str, *, verified_book_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Replay one eligible terminal authoring node without rerunning ancestors."""
 
         now = utc_now()
@@ -1847,6 +1895,624 @@ class RunRepository:
             completed_node_ids = {
                 str(item["node_id"]) for item in nodes if item["status"] == "completed"
             }
+            verified_metadata_recovery = (
+                verified_book_metadata is not None and workflow_version == "32"
+                and run["status"] == "failed" and prior_replays == 0
+                and str(node["node_id"]) == "render_evidence_footnotes"
+                and nodes[-1]["id"] == node["id"]
+                and error.get("type") == "FukamiruError"
+                and error.get("message") == (
+                    "Footnote bibliography metadata requires review: author_unconfirmed"
+                )
+                and sorted(int(item["attempt"]) for item in failed) in ([1], [1, 2])
+                and all(
+                    item["status"] == "completed" or (
+                        item["status"] == "failed"
+                        and item["node_id"] == node["node_id"]
+                        and item["input_json"] == node["input_json"]
+                        and json.loads(str(item["error_json"] or "{}")) == error
+                    ) for item in nodes
+                )
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v32-verified-bibliography-recovery-v1"),
+                ).fetchone()[0] == 0
+            )
+            correction_audit = None
+            if verified_book_metadata is not None:
+                if not verified_metadata_recovery:
+                    raise FukamiruError("Run is not an isolated bibliography metadata repair")
+                from fukamiru.revisions.verified_bibliography import verified_book_reference
+
+                references = list(unpacked.get("reference_entries") or [])
+                matches = [index for index, reference in enumerate(references)
+                           if isinstance(reference, dict) and reference.get("reference_id")
+                           == verified_book_metadata.get("reference_id")]
+                if len(matches) != 1:
+                    raise FukamiruError("Verified reference is missing or ambiguous")
+                index = matches[0]
+                before_reference = references[index]
+                references[index] = verified_book_reference(
+                    before_reference, verified_book_metadata, checked_at=now,
+                )
+                correction_audit = {
+                    "reference_id": verified_book_metadata["reference_id"],
+                    "source_kind": verified_book_metadata["source_kind"],
+                    "source_url": verified_book_metadata["source_url"], "checked_at": now,
+                    "metadata": verified_book_metadata,
+                    "previous_reference_sha256": hashlib.sha256(
+                        _json_dump(before_reference).encode()).hexdigest(),
+                    "previous_reference_metadata": {
+                        key: before_reference.get(key) for key in (
+                            "title", "author", "authors", "translators", "publisher", "year",
+                            "isbn", "publication_language", "record_type", "bibliography_people",
+                            "provenance", "resolution_status", "canonicalization_status",
+                            "source_import_title",
+                        )
+                    },
+                    "previous_node_input_json": str(node["input_json"]),
+                }
+                corrected = {**unpacked, "reference_entries": references,
+                             "verified_bibliography_metadata_corrections": [
+                                 *list(unpacked.get("verified_bibliography_metadata_corrections")
+                                       or []),
+                                 {key: value for key, value in correction_audit.items()
+                                  if key != "previous_node_input_json"},
+                             ]}
+                packed = PayloadStore(self.connection).pack(corrected)
+                self.connection.execute("UPDATE node_runs SET input_json=? WHERE id=?",
+                                        (_json_dump(packed), node["id"]))
+            typed_source_recovery = (
+                workflow_version == "32" and run["status"] == "failed"
+                and str(node["node_id"]) == "bounded_research_retry"
+                and nodes[-1]["id"] == node["id"] and prior_replays == 0
+                and error.get("type") == "IntegrityError"
+                and error.get("message") == (
+                    "CHECK constraint failed: source_type IN ('local_rag', 'online_paper')"
+                )
+                and "validate_evidence_support" in completed_node_ids
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        for item in nodes)
+                and self.connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version=?",
+                    ("0054_typed_manuscript_research_sources",),
+                ).fetchone() is not None
+            )
+            closed_failure_history = all(
+                item["id"] == node["id"] or item["status"] == "completed"
+                or (item["status"] == "failed" and any(
+                    later["node_id"] == item["node_id"] and later["status"] == "completed"
+                    for later in nodes[index + 1:]
+                )) for index, item in enumerate(nodes)
+            )
+            reader_brief_excerpt_recovery = (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and str(node["node_id"]) == "draft_rewrite"
+                and nodes[-1]["id"] == node["id"]
+                and error.get("type") == "NonRetryableFukamiruError"
+                and error.get("message") == (
+                    "V31 reader brief marginal inference excerpts do not match"
+                )
+                and closed_failure_history
+                and self.connection.execute(
+                    "SELECT 1 FROM llm_result_checkpoints WHERE run_id=? AND node_run_id=? "
+                    "AND stage='audit_reader_brief_v31' AND status='accepted' LIMIT 1",
+                    (run_id, str(node["id"])),
+                ).fetchone() is not None
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v31-reader-brief-excerpt-recovery-v1"),
+                ).fetchone()[0] == 0
+            )
+            initial_name_recovery = False
+            handoff_prefix = "V31 role draft JSON handoff violation: "
+            handoff_message = str(error.get("message") or "")
+            handoff_problems = handoff_message.removeprefix(handoff_prefix).split("; ")
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and node["node_id"] == "draft_rewrite"
+                and nodes[-1]["id"] == node["id"] and closed_failure_history
+                and prior_replay_policies in (
+                    [], ["authoring-v31-reader-brief-excerpt-recovery-v1"],
+                )
+                and error.get("type") == "NonRetryableFukamiruError"
+                and handoff_message.startswith(handoff_prefix)
+                and all(re.fullmatch(
+                    r"section [\w.:-]+ scholarship evidence [\w.:-]+ has no semantically "
+                    r"confirmed attribution predicate \(classification=unclear\)", problem,
+                ) for problem in handoff_problems)
+            ):
+                saved_audit = self.connection.execute(
+                    "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                    "AND node_run_id=? AND stage='scholarship_attribution_judgment_v31' "
+                    "AND status='accepted' ORDER BY created_at DESC LIMIT 1",
+                    (run_id, str(node["id"])),
+                ).fetchone()
+                saved_result = (PayloadStore(self.connection).unpack(json.loads(saved_audit[0]))
+                                if saved_audit is not None else {})
+                judgments = (saved_result.get("judgments", [])
+                             if isinstance(saved_result, dict) else [])
+                if not isinstance(judgments, list):
+                    judgments = []
+                unclear = [item for item in judgments if isinstance(item, dict)
+                           and item.get("classification") == "unclear"]
+                initial_name_recovery = (
+                    len(unclear) == len(handoff_problems)
+                    and len({item.get("candidate_id") for item in unclear}) == len(unclear)
+                    and all(re.search(r"「[^」]*[A-Za-zＡ-Ｚａ-ｚ][.．]」",
+                                      str(item.get("reason") or ""))
+                            and re.search(r"途切|切れ|truncat", str(item.get("reason") or ""))
+                            for item in unclear)
+                    and self.connection.execute(
+                        "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                        "event_type='run.failed_authoring_node_replayed' AND "
+                        "json_extract(payload_json,'$.policy')=?",
+                        (run_id, "authoring-v31-initial-name-sentence-recovery-v1"),
+                    ).fetchone()[0] == 0
+                )
+            source_use_recovery = False
+            source_constraints: list[dict[str, Any]] = []
+            role_error = re.fullmatch(
+                r"draft evidence ([\w.:-]+) does not support claim role source_fact: "
+                r"[\w.:-]+(?:, [\w.:-]+)*", str(error.get("message") or ""),
+            )
+            same_failures = [item for item in failed if item["node_id"] == node["node_id"]
+                             and item["input_json"] == node["input_json"]
+                             and json.loads(str(item["error_json"] or "{}")) == error]
+            same_ids = {item["id"] for item in same_failures}
+            same_attempts = sorted(int(item["attempt"]) for item in same_failures)
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and node["node_id"] == "draft_rewrite"
+                and nodes[-1]["id"] == node["id"] and prior_replays == 0
+                and error.get("type") == "FukamiruError" and role_error is not None
+                and same_attempts and same_attempts[-1] == int(node["attempt"]) <= 3
+                and same_attempts == list(range(same_attempts[0], same_attempts[-1] + 1))
+                and all(
+                    item["id"] in same_ids or item["status"] == "completed"
+                    or (item["status"] == "failed" and any(
+                        later["node_id"] == item["node_id"] and later["status"] == "completed"
+                        for later in nodes[index + 1:]
+                    )) for index, item in enumerate(nodes)
+                )
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v31-source-use-contract-recovery-v1"),
+                ).fetchone()[0] == 0
+            ):
+                try:
+                    source_constraints = draft_source_use_constraints(unpacked, {
+                        "evidence_treatment": [{"evidence_id": role_error[1],
+                                                "prose_treatment": "externally_supported_fact"}],
+                    })
+                except (FukamiruError, ValueError, KeyError):
+                    source_constraints = []
+                source_use_recovery = (
+                    len(source_constraints) == 1
+                    and source_constraints[0]["error"] == error["message"]
+                    and bool(source_constraints[0]["permitted_uses"])
+                    and bool(source_constraints[0]["fixed_sources"])
+                    and all(source["evidence_kind"] == "bibliographic_record"
+                            for source in source_constraints[0]["fixed_sources"])
+                    and all(use["claim_role"] == "contextual"
+                            for use in source_constraints[0]["permitted_uses"])
+                )
+            generation_recovery = False
+            generation_correction = None
+            corrected_generation_input = None
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and node["node_id"] == "reconcile_candidate_context"
+                and nodes[-1]["id"] == node["id"]
+                and error == {"type": "FukamiruError",
+                              "message": "Proofreading changed claim/source evidence identity"}
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        or (item["status"] == "failed" and any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        )) for index, item in enumerate(nodes))
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v31-draft-evidence-generation-recovery-v1"),
+                ).fetchone()[0] == 0
+            ):
+                producer = next((item for item in reversed(nodes[:-1])
+                                 if item["node_id"] == "draft_rewrite"
+                                 and item["status"] == "completed"), None)
+                if producer is not None:
+                    output = self.connection.execute(
+                        "SELECT output_json FROM node_runs WHERE id=?", (producer["id"],),
+                    ).fetchone()[0]
+                    store = PayloadStore(self.connection)
+                    compiled = _v31_stale_draft_evidence_baseline(
+                        unpacked, store.unpack(json.loads(producer["input_json"] or "{}")),
+                        store.unpack(json.loads(output or "{}")),
+                    )
+                    if compiled is not None:
+                        corrected = refresh_draft_evidence_identity(
+                            unpacked, compiled, producer_node_run_id=str(producer["id"]),
+                        )
+                        corrected_generation_input = _json_dump(store.pack(corrected))
+                        generation_correction = {
+                            "producer_node_run_id": producer["id"],
+                            "previous_node_input": store.pack({"input_json": node["input_json"]}),
+                            "previous_identity_hash": unpacked["evidence_identity_hash"],
+                            "identity_hash": corrected["evidence_identity_hash"],
+                            "corrected_input_sha256": hashlib.sha256(
+                                corrected_generation_input.encode()).hexdigest(),
+                            "changed_fields": sorted(key for key in set(unpacked) | set(corrected)
+                                                     if unpacked.get(key) != corrected.get(key)),
+                        }
+                        generation_recovery = True
+            if (typed_source_recovery or verified_metadata_recovery
+                    or reader_brief_excerpt_recovery or initial_name_recovery
+                    or source_use_recovery or generation_recovery):
+                if verified_metadata_recovery:
+                    policy = "authoring-v32-verified-bibliography-recovery-v1"
+                elif typed_source_recovery:
+                    policy = "authoring-v32-typed-research-source-recovery-v1"
+                elif reader_brief_excerpt_recovery:
+                    policy = "authoring-v31-reader-brief-excerpt-recovery-v1"
+                elif initial_name_recovery:
+                    policy = "authoring-v31-initial-name-sentence-recovery-v1"
+                elif generation_recovery:
+                    policy = "authoring-v31-draft-evidence-generation-recovery-v1"
+                else:
+                    policy = "authoring-v31-source-use-contract-recovery-v1"
+                payload = {
+                    "node_id": str(node["node_id"]), "attempt": int(node["attempt"]),
+                    "workflow_version": workflow_version,
+                    "policy": policy,
+                    "previous_node_error": error,
+                    "previous_node_completed_at": node["completed_at"],
+                    "input_sha256": hashlib.sha256(str(node["input_json"]).encode()).hexdigest(),
+                }
+                if correction_audit is not None:
+                    payload["verified_bibliography_correction"] = correction_audit
+                if source_use_recovery:
+                    payload["source_use_constraints"] = source_constraints
+                if generation_correction is not None:
+                    payload["evidence_generation_correction"] = generation_correction
+                    self.connection.execute("UPDATE node_runs SET input_json=? WHERE id=?",
+                                            (corrected_generation_input, node["id"]))
+                self.connection.execute(
+                    "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                    "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                    (run_id, "run.failed_authoring_node_replayed", str(node["id"]),
+                     _json_dump(payload), now),
+                )
+                self.connection.execute(
+                    "UPDATE node_runs SET status='queued',started_at=NULL,completed_at=NULL,"
+                    "output_json=NULL,error_json=NULL,lease_owner=NULL,lease_acquired_at=NULL,"
+                    "lease_heartbeat_at=NULL,lease_expires_at=NULL WHERE id=?",
+                    (node["id"],),
+                )
+                self.connection.execute(
+                    "UPDATE runs SET status='queued',error_json=NULL,completed_at=NULL WHERE id=?",
+                    (run_id,),
+                )
+                self.connection.commit()
+                return {"run_id": run_id, "node_run_id": str(node["id"]),
+                        "node_id": str(node["node_id"]), "attempt": int(node["attempt"]),
+                        "status": "queued", "manual_replay_count": prior_replays + 1}
+            projection_failures = [item for item in failed
+                                   if item["node_id"] == node["node_id"]
+                                   and item["input_json"] == node["input_json"]
+                                   and json.loads(item["error_json"] or "{}") == error]
+            projection_ids = {item["id"] for item in projection_failures}
+            projection_attempts = sorted(int(item["attempt"]) for item in projection_failures)
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and node["node_id"] == "render_evidence_footnotes"
+                and nodes[-1]["id"] == node["id"]
+                and projection_attempts and projection_attempts[-1] <= 3
+                and projection_attempts == list(range(
+                    projection_attempts[0], projection_attempts[-1] + 1))
+                and error.get("type") == "FukamiruError"
+                and str(error.get("message") or "").startswith(
+                    "Authoring footnote needs a unique visible source mention "
+                    "in its cited sentence: "
+                )
+                and all(item["id"] in projection_ids or item["status"] == "completed"
+                        or (item["status"] == "failed" and any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        )) for index, item in enumerate(nodes))
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v31-stale-candidate-generation-recovery-v1"),
+                ).fetchone()[0] == 0
+            ):
+                parent = next((item for item in reversed(nodes[:-1])
+                               if item["node_id"] == "reconcile_candidate_context"
+                               and item["status"] == "completed"), None)
+                corrected = recover_stale_candidate_projection(
+                    unpacked, PayloadStore(self.connection).unpack(
+                        json.loads(parent["input_json"] or "{}")),
+                    error_message=error["message"], source_node_run_id=str(node["id"]),
+                ) if parent else None
+                if corrected is not None:
+                    target_id = str(uuid.uuid4())
+                    attempt = max(int(item["attempt"]) for item in nodes
+                                  if item["node_id"] == "reconcile_candidate_context") + 1
+                    self.connection.execute(
+                        "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "resource_lane) VALUES(?,?,'reconcile_candidate_context',?,'queued',?,?)",
+                        (target_id, run_id, attempt, _json_dump(
+                            PayloadStore(self.connection).pack(corrected)), "ingestion_cpu"),
+                    )
+                    self.connection.execute("UPDATE runs SET status='queued',error_json=NULL,"
+                                            "completed_at=NULL WHERE id=?", (run_id,))
+                    payload = {"policy": "authoring-v31-stale-candidate-generation-recovery-v1",
+                               "node_id": node["node_id"], "attempt": int(node["attempt"]),
+                               "previous_node_error": error,
+                               "input_sha256": hashlib.sha256(
+                                   node["input_json"].encode()).hexdigest(),
+                               "target_node_run_id": target_id,
+                               "recovery_target_node_id": "reconcile_candidate_context",
+                               "cleared_results": corrected["prior_candidate_generations"][-1]}
+                    self.connection.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                        (run_id, "run.failed_authoring_node_replayed", node["id"],
+                         _json_dump(payload), now),
+                    )
+                    self.connection.commit()
+                    return {"run_id": run_id, "node_run_id": target_id,
+                            "node_id": "reconcile_candidate_context", "attempt": attempt,
+                            "status": "queued", "manual_replay_count": 1}
+            recovered_projection_history = []
+            if node["node_id"] in {
+                "extract_proofreading_sentences", "render_evidence_footnotes", "finalize_authoring",
+            }:
+                for row in self.connection.execute(
+                    "SELECT payload_json FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy') IN (?,?)",
+                    (run_id, "authoring-v31-stale-candidate-generation-recovery-v1",
+                     "authoring-v31-empty-citation-projection-recovery-v1"),
+                ):
+                    history = json.loads(row[0])
+                    if any(item["id"] == history.get("target_node_run_id")
+                           and item["status"] == "completed" for item in nodes):
+                        recovered_projection_history.append(history)
+
+            def old_projection_failure(item: sqlite3.Row) -> bool:
+                return any(item["node_id"] == history.get("node_id")
+                           and hashlib.sha256(item["input_json"].encode()).hexdigest()
+                           == history.get("input_sha256")
+                           and json.loads(item["error_json"] or "{}")
+                           == history.get("previous_node_error")
+                           for history in recovered_projection_history)
+
+            submission_policy = "authoring-v31-submission-marker-recovery-v1"
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and nodes[-1]["id"] == node["id"] and node["node_id"] == "finalize_authoring"
+                and error == {"type": "ValueError",
+                              "message": "authoring run already has a pending proposal"}
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        or (item["status"] == "failed" and (old_projection_failure(item) or any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        ))) for index, item in enumerate(nodes))
+                and not self.connection.execute(
+                    "SELECT 1 FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?", (run_id, submission_policy),
+                ).fetchone()
+                and self.connection.execute(
+                    "SELECT 1 FROM authoring_pending_proposals WHERE run_id=? AND id=? "
+                    "AND status='pending'", (run_id, unpacked.get("authoring_proposal_id")),
+                ).fetchone()
+            ):
+                for history in unpacked.get("prior_candidate_generations") or []:
+                    if "authoring_submission_revalidation" not in dict(
+                        history.get("cleared_fields") or {}):
+                        continue
+                    source_node = self.connection.execute(
+                        "SELECT input_json FROM node_runs WHERE run_id=? AND id=?",
+                        (run_id, history.get("source_node_run_id")),
+                    ).fetchone()
+                    if source_node is None:
+                        continue
+                    corrected = recover_submission_revalidation(unpacked,
+                        PayloadStore(self.connection).unpack(json.loads(source_node[0])),
+                        str(history["source_node_run_id"]))
+                    if corrected is None:
+                        continue
+                    marker = corrected["authoring_submission_revalidation"]
+                    if not self.connection.execute(
+                        "SELECT 1 FROM human_reviews h JOIN review_feedback f ON f.review_id=h.id "
+                        "WHERE h.id=? AND h.run_id=? AND h.object_type='authoring_submission' "
+                        "AND h.status='edited' AND f.submitted_revision IS NOT NULL",
+                        (marker["review_id"], run_id),
+                    ).fetchone():
+                        continue
+                    target_id = str(uuid.uuid4())
+                    attempt = int(node["attempt"]) + 1
+                    self.connection.execute(
+                        "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "resource_lane) VALUES(?,?,'finalize_authoring',?,'queued',?,?)",
+                        (target_id, run_id, attempt,
+                         _json_dump(PayloadStore(self.connection).pack(corrected)),
+                         "ingestion_cpu"))
+                    payload = {"policy": submission_policy, "node_id": node["node_id"],
+                        "attempt": int(node["attempt"]), "previous_node_error": error,
+                        "input_sha256": hashlib.sha256(node["input_json"].encode()).hexdigest(),
+                        "target_node_run_id": target_id,
+                        "recovery_target_node_id": "finalize_authoring",
+                        "marker_recovery": corrected[
+                            "authoring_submission_revalidation_recoveries"][-1]}
+                    self.connection.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                        (run_id, "run.failed_authoring_node_replayed", node["id"],
+                         _json_dump(payload), now))
+                    self.connection.execute("UPDATE runs SET status='queued',error_json=NULL,"
+                                            "completed_at=NULL WHERE id=?", (run_id,))
+                    self.connection.commit()
+                    return {"run_id": run_id, "node_run_id": target_id,
+                            "node_id": "finalize_authoring", "attempt": attempt,
+                            "status": "queued", "manual_replay_count": 1}
+
+            qualification_policy = "authoring-v31-rendered-qualification-recovery-v1"
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and nodes[-1]["id"] == node["id"]
+                and node["node_id"] == "render_evidence_footnotes"
+                and error.get("type") == "FukamiruError"
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        or (item["status"] == "failed" and (old_projection_failure(item) or any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        ))) for index, item in enumerate(nodes))
+                and not self.connection.execute(
+                    "SELECT 1 FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, qualification_policy),
+                ).fetchone()
+            ):
+                qualification = rendered_qualification_recovery(
+                    unpacked, str(error.get("message") or ""))
+                if qualification is not None:
+                    payload = {"policy": qualification_policy, "node_id": node["node_id"],
+                               "attempt": int(node["attempt"]), "previous_node_error": error,
+                               "input_sha256": hashlib.sha256(
+                                   node["input_json"].encode()).hexdigest(),
+                               "qualification_review": qualification}
+                    self.connection.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                        (run_id, "run.failed_authoring_node_replayed", node["id"],
+                         _json_dump(payload), now))
+                    self.connection.execute("UPDATE node_runs SET status='queued',started_at=NULL,"
+                        "completed_at=NULL,error_json=NULL,output_json=NULL,lease_owner=NULL,"
+                        "lease_acquired_at=NULL,lease_heartbeat_at=NULL,lease_expires_at=NULL "
+                        "WHERE id=?", (node["id"],))
+                    self.connection.execute("UPDATE runs SET status='queued',error_json=NULL,"
+                                            "completed_at=NULL WHERE id=?", (run_id,))
+                    self.connection.commit()
+                    return {"run_id": run_id, "node_run_id": str(node["id"]),
+                            "node_id": str(node["node_id"]), "attempt": int(node["attempt"]),
+                            "status": "queued", "manual_replay_count": 1}
+
+            empty_projection_policy = "authoring-v31-empty-citation-projection-recovery-v1"
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and nodes[-1]["id"] == node["id"]
+                and node["node_id"] == "render_evidence_footnotes"
+                and error.get("type") == "FukamiruError"
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        or (item["status"] == "failed" and (old_projection_failure(item) or any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        ))) for index, item in enumerate(nodes))
+                and not self.connection.execute(
+                    "SELECT 1 FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, empty_projection_policy),
+                ).fetchone()
+            ):
+                corrected = recover_empty_citation_projection(
+                    unpacked, error_message=str(error.get("message") or ""),
+                    source_node_run_id=str(node["id"]))
+                if corrected is not None:
+                    target = "reconcile_candidate_context_after_proofreading"
+                    target_id = str(uuid.uuid4())
+                    attempt = max((int(item["attempt"]) for item in nodes
+                                   if item["node_id"] == target), default=0) + 1
+                    self.connection.execute(
+                        "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "resource_lane) VALUES(?,?,?,?,'queued',?,?)",
+                        (target_id, run_id, target, attempt,
+                         _json_dump(PayloadStore(self.connection).pack(corrected)),
+                         "ingestion_cpu"))
+                    payload = {"policy": empty_projection_policy, "node_id": node["node_id"],
+                               "attempt": int(node["attempt"]), "previous_node_error": error,
+                               "input_sha256": hashlib.sha256(
+                                   node["input_json"].encode()).hexdigest(),
+                               "target_node_run_id": target_id, "recovery_target_node_id": target,
+                               "projection_recovery": corrected[
+                                   "authoring_empty_citation_projection_recoveries"][-1]}
+                    self.connection.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                        (run_id, "run.failed_authoring_node_replayed", node["id"],
+                         _json_dump(payload), now))
+                    self.connection.execute("UPDATE runs SET status='queued',error_json=NULL,"
+                                            "completed_at=NULL WHERE id=?", (run_id,))
+                    self.connection.commit()
+                    return {"run_id": run_id, "node_run_id": target_id, "node_id": target,
+                            "attempt": attempt, "status": "queued", "manual_replay_count": 1}
+
+            if (
+                verified_book_metadata is None and workflow_version in {"31", "32"}
+                and run["status"] == "failed" and prior_replays == 0
+                and nodes[-1]["id"] == node["id"]
+                and node["node_id"] == "extract_proofreading_sentences"
+                and error == {"type": "FukamiruError",
+                              "message": "proofreading.source_checkpoint_changed"}
+                and all(item["id"] == node["id"] or item["status"] == "completed"
+                        or (item["status"] == "failed" and (old_projection_failure(item) or any(
+                            later["node_id"] == item["node_id"] and later["status"] == "completed"
+                            for later in nodes[index + 1:]
+                        ))) for index, item in enumerate(nodes))
+                and self.connection.execute(
+                    "SELECT 1 FROM schema_migrations WHERE version=?",
+                    ("0055_manuscript_proofreading_generations",),
+                ).fetchone()
+                and self.connection.execute(
+                    "SELECT COUNT(*) FROM event_log WHERE run_id=? AND "
+                    "event_type='run.failed_authoring_node_replayed' AND "
+                    "json_extract(payload_json,'$.policy')=?",
+                    (run_id, "authoring-v31-proofreading-generation-recovery-v1"),
+                ).fetchone()[0] == 0
+            ):
+                generation = checkpoint_recovery(
+                    self.connection, run_id, str(run["workflow_name"]), workflow_version, unpacked,
+                )
+                if generation is not None:
+                    payload = {"policy": "authoring-v31-proofreading-generation-recovery-v1",
+                               "node_id": node["node_id"], "attempt": int(node["attempt"]),
+                               "previous_node_error": error,
+                               "input_sha256": hashlib.sha256(
+                                   node["input_json"].encode()).hexdigest(),
+                               "proofreading_generation": generation}
+                    self.connection.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES(?,?,'node_run',?,?,?)",
+                        (run_id, "run.failed_authoring_node_replayed", node["id"],
+                         _json_dump(payload), now),
+                    )
+                    self.connection.execute("UPDATE node_runs SET status='queued',started_at=NULL,"
+                        "completed_at=NULL,error_json=NULL,output_json=NULL,lease_owner=NULL,"
+                        "lease_acquired_at=NULL,lease_heartbeat_at=NULL,lease_expires_at=NULL "
+                        "WHERE id=?", (node["id"],))
+                    self.connection.execute("UPDATE runs SET status='queued',error_json=NULL,"
+                                            "completed_at=NULL WHERE id=?", (run_id,))
+                    self.connection.commit()
+                    return {"run_id": run_id, "node_run_id": str(node["id"]),
+                            "node_id": str(node["node_id"]), "attempt": int(node["attempt"]),
+                            "status": "queued", "manual_replay_count": 1}
             cancellation_event = self.connection.execute(
                 "SELECT payload_json FROM event_log WHERE run_id=? "
                 "AND event_type='run.cancelled' ORDER BY rowid DESC LIMIT 1",

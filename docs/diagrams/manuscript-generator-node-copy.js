@@ -602,9 +602,9 @@ window.MANUSCRIPT_NODE_COPY = {
       "id": "human_approval",
       "lane": "submission",
       "purpose": "必要な場合だけ人間が承認・差戻し",
-      "summary": "自動判定で人間修正が必要とされた箇所を確認し、承認または対象ノードへ差し戻す。",
-      "input": "submission package、review items",
-      "output": "approved submission または scoped revision request",
+      "summary": "右ペインでHTMLと質問を確認し、回答・LLMの過剰要求であるという判断・全体コメントを保存する。承認または新しい段落形成へ戻す。過剰要求の判断を外部資料の裏付けと混同しない。",
+      "input": "submission package、質問と個別回答、過剰要求の判断、全体コメント",
+      "output": "approved submission または回答を反映する新しい段落形成",
       "wave": "",
       "parallel": ""
     }

@@ -647,6 +647,96 @@ def _draft_source_use(
     return role, sources, citations
 
 
+def draft_source_use_constraints(
+    context: dict[str, Any], section: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Expose unsupported source uses to the writer without changing frozen capabilities."""
+    fixed = FixedAssets.model_validate(context["fixed_assets"])
+    fixed_by_id = {item.source_id: item for item in fixed.sources}
+    projections = project_argument_evidence_sources(context)
+    constraints: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for treatment in section.get("evidence_treatment") or []:
+        evidence_id = str(treatment.get("evidence_id") or "")
+        mode = str(treatment.get("prose_treatment") or "")
+        if (evidence_id, mode) in seen:
+            continue
+        seen.add((evidence_id, mode))
+        projection = projections.get(evidence_id)
+        if projection is None and evidence_id in fixed.allowed_source_ids:
+            projection = {
+                "lineage_source_ids": (evidence_id,), "fixed_source_ids": (evidence_id,),
+                "citation_source_ids": ((evidence_id,) if fixed_by_id[evidence_id].evidence_kind
+                                        == "bibliographic_record" else ()),
+                "lineage_only_source_ids": (),
+            }
+        error = f"draft evidence {evidence_id} is missing from the argument graph"
+        if projection is not None:
+            try:
+                _draft_source_use(evidence_id, mode, projection, fixed_by_id)
+                continue
+            except FukamiruError as exc:
+                error = str(exc)
+        permitted = []
+        if projection is not None:
+            for candidate in (
+                "externally_supported_fact", "attributed_close_reading",
+                "qualified_interpretation", "attributed_user_statement", "attributed_scholarship",
+            ):
+                try:
+                    role, sources, _ = _draft_source_use(
+                        evidence_id, candidate, projection, fixed_by_id,
+                    )
+                except FukamiruError:
+                    continue
+                permitted.append({"prose_treatment": candidate, "claim_role": role,
+                                  "source_ids": list(sources), "verification_status": {
+                                      source_id: fixed_by_id[source_id].verification_status
+                                      for source_id in sources
+                                  }})
+        constraints.append({"evidence_id": evidence_id, "current_prose_treatment": mode,
+                            "error": error, "permitted_uses": permitted,
+                            "fixed_sources": [{
+                                "source_id": source_id,
+                                "evidence_kind": fixed_by_id[source_id].evidence_kind,
+                                "verification_status": fixed_by_id[source_id].verification_status,
+                                "support_capabilities": fixed_by_id[source_id].support_capabilities
+                                .model_dump(mode="json"),
+                            } for source_id in projection["fixed_source_ids"]]
+                            if projection is not None else []})
+    return constraints
+
+
+def evidence_use_identity_hash(uses: list[EvidenceUse]) -> str:
+    return canonical_hash([{
+        "evidence_use_id": item.evidence_use_id, "claim_id": item.claim_id,
+        "sentence_id": item.sentence_id, "source_ids": list(item.source_ids),
+    } for item in uses])
+
+
+def refresh_draft_evidence_identity(
+    context: dict[str, Any], compiled_uses: list[EvidenceUse], *, producer_node_run_id: str,
+) -> dict[str, Any]:
+    """Start a baseline after strict draft compilation, before later proofreading."""
+    updated = dict(context)
+    identity = evidence_use_identity_hash(compiled_uses)
+    previous = str(context.get("evidence_identity_hash") or "")
+    if previous and previous != identity:
+        updated["evidence_identity_baseline_history"] = [
+            *list(context.get("evidence_identity_baseline_history") or []),
+            {"identity_hash": previous,
+             "validation": dict(context.get("proofreading_evidence_identity_validation") or {}),
+             "generation": dict(context.get("draft_evidence_identity_generation") or {})},
+        ]
+    updated.pop("proofreading_evidence_identity_validation", None)
+    updated["evidence_identity_hash"] = identity
+    updated["draft_evidence_identity_generation"] = {
+        "producer_node_run_id": producer_node_run_id,
+        "identity_hash": identity, "evidence_use_count": len(compiled_uses),
+    }
+    return updated
+
+
 def _sentences(text: str) -> list[str]:
     values = [
         item.strip()

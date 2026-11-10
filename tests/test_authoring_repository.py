@@ -318,6 +318,9 @@ class AuthoringRepositoryTests(unittest.TestCase):
                 "0050_pdf_ocr_recovery_inputs",
                 "0051_corpus_sync_skips",
                 "0052_research_source_handoffs",
+                "0053_review_feedback",
+                "0054_typed_manuscript_research_sources",
+                "0055_manuscript_proofreading_generations",
             ],
             migrated_database.migrate(),
         )

@@ -2771,6 +2771,11 @@ def describe_authoring_request(
         "the supplied schema. Preserve stable IDs from the input. Add generated material only "
         "with explicit provenance; distinguish retrieved sources from inference and mark "
         "unverified information honestly.\n"
+        "When human_question_feedback is supplied, apply its answers and overall_comments "
+        "during generation, revision and review. A llm_overreach decision rejects that request "
+        "as excessive: do not repeat the same demand for the same target. This is an author "
+        "decision, never external evidence or permission to invent sources, upgrade source "
+        "verification, or accept broken references.\n"
         f"{language_contract}"
         f"Stage: {stage}\nTask: {guidance}\n\n"
     )

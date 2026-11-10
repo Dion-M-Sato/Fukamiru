@@ -41,7 +41,9 @@ class MigrationTests(unittest.TestCase):
             current = SQLiteDatabase(root / "state.db", self.migrations_root / "state")
             self.assertEqual(
                 current.migrate(), ["0050_pdf_ocr_recovery_inputs", "0051_corpus_sync_skips",
-                                    "0052_research_source_handoffs"]
+                                    "0052_research_source_handoffs", "0053_review_feedback",
+                                    "0054_typed_manuscript_research_sources",
+                                    "0055_manuscript_proofreading_generations"]
             )
             with current.connect() as connection:
                 after = dict(connection.execute("SELECT * FROM pdf_ocr_jobs").fetchone())
@@ -117,10 +119,14 @@ class MigrationTests(unittest.TestCase):
                     "0050_pdf_ocr_recovery_inputs",
                     "0051_corpus_sync_skips",
                     "0052_research_source_handoffs",
+                    "0053_review_feedback",
+                    "0054_typed_manuscript_research_sources",
+                    "0055_manuscript_proofreading_generations",
                 ],
             )
             self.assertEqual(database.migrate(), [])
             required = {
+                "review_feedback",
                 "projects",
                 "runs",
                 "event_log",
@@ -169,6 +175,7 @@ class MigrationTests(unittest.TestCase):
                 "manuscript_luna_cache",
                 "manuscript_luna_attempts",
                 "manuscript_proofreading_logs",
+                "manuscript_proofreading_generations",
                 "authoring_plans",
                 "authoring_plan_revisions",
                 "atomic_propositions",

@@ -750,6 +750,87 @@ def test_reader_brief_rejects_untraceable_marginal_inference() -> None:
         )
 
 
+@pytest.mark.parametrize("mutation", [None, "judgment", "reason", "field", "remove", "bad_quote"])
+def test_reader_brief_repairs_only_noncontiguous_marginal_quotes(mutation: str | None) -> None:
+    source = {
+        "section_id": "s1", "article_role": "body", "section_result": "仮想展示の配置を比較する。",
+        "claims": [], "evidence": [], "warrants": [],
+    }
+    original_framing = "架空の展示順序をどう組み立てるか。"
+    candidate = {key: value for key, value in source.items() if key != "article_role"}
+    candidate["framing"] = "模型を入口、図面を中央、記録を出口に置く案をどう評価するか。"
+    inference = {
+        "source_field": "framing", "source_item_id": "", "field": "framing", "item_id": "",
+        "source_excerpt": "架空の展示順序をどう組み立てるか",
+        "candidate_excerpt": "模型を記録を出口に置く案をどう評価するか",
+        "reason": "順序の検討から具体的な配置案の評価へ問いが変わっている。",
+    }
+    verdict = {
+        "section_id": "s1", "meaning_preserved": "marginal", "natural_japanese": True,
+        "internal_language_absent": True, "internal_issues": [], "japanese_issues": [],
+        "marginal_inferences": [inference], "reason": "意味のずれを人間へ引き継ぐ。",
+    }
+    raw = {"sections": [source]}
+    context = {"section_contracts": [{"section_id": "s1", "local_question": original_framing}]}
+    original_context = deepcopy(context)
+
+    class FakeGenerator:
+        audits = 0
+        repairs = 0
+
+        def _authoring_generate(self, _claimed, stage, _context, *, payload, **kwargs):
+            if stage == "naturalize_reader_brief_v31":
+                return {"sections": [deepcopy(candidate)]}
+            if "excerpt_repair" in kwargs["operation_name"]:
+                self.repairs += 1
+                result = deepcopy(payload["original_audit"])
+                row = result["sections"][0]
+                row["marginal_inferences"][0]["candidate_excerpt"] = candidate["framing"]
+                if mutation == "judgment":
+                    row["meaning_preserved"] = "true"
+                elif mutation == "reason":
+                    row["marginal_inferences"][0]["reason"] = "変更した判断"
+                elif mutation == "field":
+                    row["marginal_inferences"][0]["field"] = "section_result"
+                elif mutation == "remove":
+                    row["marginal_inferences"] = []
+                elif mutation == "bad_quote":
+                    row["marginal_inferences"][0]["candidate_excerpt"] = "候補にない語句"
+                return result
+            self.audits += 1
+            row = deepcopy(verdict)
+            if self.audits > 1:
+                row["marginal_inferences"][0]["candidate_excerpt"] = candidate["framing"]
+            return {"sections": [row]}
+
+    fake = FakeGenerator()
+    if mutation:
+        with pytest.raises(NonRetryableFukamiruError, match=(
+            "excerpts do not match" if mutation == "bad_quote" else "changed audit decisions"
+        )):
+            WorkerRunner._authoring_naturalize_reader_content_brief_v31(
+                fake, object(), context, raw,
+            )
+        assert fake.repairs == 1
+    else:
+        projected, report = WorkerRunner._authoring_naturalize_reader_content_brief_v31(
+            fake, object(), context, raw,
+        )
+        assert fake.repairs == 1
+        assert projected["sections"][0]["framing"] == candidate["framing"]
+        assert report["audit"][0]["meaning_preserved"] == "marginal"
+        assert report["marginal_inferences"][0]["reason"] == inference["reason"]
+        repair = report["marginal_excerpt_repairs"][0]
+        assert repair["original_audit"] == [verdict]
+        assert repair["corrected_audit"][0]["marginal_inferences"][0][
+            "candidate_excerpt"
+        ] == candidate["framing"]
+        _, reviews = WorkerRunner._authoring_v31_reader_brief_marginal_reviews([report])
+        assert reviews[0]["category"] == "reader_brief_marginal_inference"
+    assert context == original_context
+    assert raw == {"sections": [source]}
+
+
 def test_reader_brief_marginal_record_can_cross_source_fields() -> None:
     source = {
         "section_id": "s1", "article_role": "body",

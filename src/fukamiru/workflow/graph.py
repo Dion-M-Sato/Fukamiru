@@ -164,6 +164,14 @@ class WorkflowDefinition(BaseModel):
         ) -> None:
             handler = by_id[node_id].handler
             following = [edge for edge in self.edges if edge.source == node_id]
+            if persisted and handler == "authoring.human_approval":
+                # A deliberate human revision starts a new candidate generation.
+                # It is not an automatic transformation of the frozen artifact.
+                following = [edge for edge in following if not (
+                    edge.condition == "failure"
+                    and edge.target == "start_paragraph_formation"
+                    and by_id[edge.target].handler == "authoring.start_paragraph_formation"
+                )]
             if node_id in path:
                 raise ValueError(
                     "canonical artifact transformation is forbidden after "

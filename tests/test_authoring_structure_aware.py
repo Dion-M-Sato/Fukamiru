@@ -17,6 +17,8 @@ from fukamiru.authoring.evidence_contracts import (
     RepairOperation,
     build_fixed_assets,
     build_repair_resolution_proofs,
+    evidence_use_identity_hash,
+    refresh_draft_evidence_identity,
 )
 from fukamiru.authoring.render import recover_citation_mentions, render_canonical_html
 from fukamiru.authoring.structure_aware import (
@@ -3488,6 +3490,23 @@ def test_v31_candidate_reconciliation_preserves_claim_source_identity():
             SimpleNamespace(),
             {**reconciled, "evidence_uses": [changed_use]},
         )
+    regenerated = refresh_draft_evidence_identity(
+        {**reconciled, "evidence_uses": [changed_use]},
+        [EvidenceUse.model_validate(changed_use)], producer_node_run_id="new-draft",
+    )
+    assert regenerated["fixed_assets"] == context["fixed_assets"]
+    assert regenerated["evidence_identity_baseline_history"][0]["identity_hash"] == (
+        reconciled["evidence_identity_hash"]
+    )
+    assert "proofreading_evidence_identity_validation" not in regenerated
+    assert runner._authoring_reconcile_candidate_context(
+        SimpleNamespace(), regenerated,
+    ).context["proofreading_evidence_identity_validation"]["passed"] is True
+    with pytest.raises(FukamiruError, match="claim/source evidence identity"):
+        runner._authoring_reconcile_candidate_context(
+            SimpleNamespace(node_id="reconcile_candidate_context_after_proofreading"),
+            {**regenerated, "evidence_uses": context["evidence_uses"]},
+        )
 
 
 def test_v31_audit_checkpoint_requires_ordered_section_coverage():
@@ -4013,6 +4032,8 @@ def test_v31_section_contract_json_handoff_accepts_role_specific_zero_moves(monk
     ("conclusion", True),
     ("evidence", False),
     ("initial_ids", True),
+    ("source_capability", False),
+    ("bibliographic_capability", False),
 ])
 def test_v31_draft_json_routes_introduction_body_then_conclusion(
     monkeypatch, tmp_path, repair_target, conclusion_extra_id,
@@ -4020,6 +4041,9 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
     data = _handoff_fixture()
     context = {
         "plan_id": "plan", "plan_revision": 1,
+        "submission_validation_gate": {"failed_validations": ["old"]},
+        "evidence_footnote_render_report": {"old": True},
+        "manuscript_proofreading_shadow": {"old": True},
         "use_rag": False,
         "section_contracts": data["sections"],
         "research_problem": data["problem"].model_dump(mode="json"),
@@ -4048,6 +4072,14 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
     runner.databases = SimpleNamespace(state=object())
     runner.settings = SimpleNamespace(paths=SimpleNamespace(runtime_root=tmp_path))
     runner._register_artifact = lambda *args, **kwargs: None
+    if repair_target == "source_capability":
+        context["fixed_assets"] = build_fixed_assets({
+            "propositions": [{"id": "e1", "text": "著者の解釈。"}],
+        }).model_dump(mode="json")
+    elif repair_target == "bibliographic_capability":
+        context["fixed_assets"] = build_fixed_assets({
+            "evidence_context": [{"id": "e1", "title": "書名", "verification_status": "verified"}],
+        }).model_dump(mode="json")
     runner._authoring_reconcile_theory_citation_titles = lambda value, **_kwargs: value
     runner._authoring_draft_contracts_with_scholarship = lambda value, sections: sections
     runner._authoring_draft_plan_projection = lambda value, batch: {}
@@ -4128,6 +4160,17 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
             })
             if role == "body":
                 section["evidence_treatment"][0]["evidence_id"] = "e1"
+                if repair_target in {"source_capability", "bibliographic_capability"} and (
+                    payload.get("source_use_constraints")
+                ):
+                    section["evidence_treatment"][0][
+                        "prose_treatment"
+                    ] = ("attributed_user_statement" if repair_target == "source_capability"
+                         else "attributed_scholarship")
+                    section["paragraphs"][0]["text"] = (
+                        f"著者は本文 {section_id}と考える。" if repair_target == "source_capability"
+                        else f"本稿は書名を本文 {section_id}の比較の視角として参照する。"
+                    )
             sections.append(section)
         result = {"sections": sections}
         if stage == "draft_conclusion_v31":
@@ -4162,6 +4205,13 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
         SimpleNamespace(workflow_version="31", node_run_id="n1", run_id="run-1"),
         context,
     ).context
+    assert output["evidence_identity_hash"] == evidence_use_identity_hash(
+        [EvidenceUse.model_validate(item) for item in output["evidence_uses"]]
+    )
+    assert output["draft_evidence_identity_generation"]["producer_node_run_id"] == "n1"
+    assert "submission_validation_gate" not in output
+    assert "evidence_footnote_render_report" not in output
+    assert "manuscript_proofreading_shadow" not in output
     assert [stage for stage, _ in calls[:3]] == [
         "draft_introduction_v31", "draft_body_v31", "draft_conclusion_v31"
     ]
@@ -4177,8 +4227,21 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
         "s1", "s2"
     ]
     assert output["draft_contract_repair_count"] == (
+        3 if repair_target in {"source_capability", "bibliographic_capability"} else
         2 if repair_target == "body" else 0 if repair_target == "initial_ids" else 1
     )
+    if repair_target in {"source_capability", "bibliographic_capability"}:
+        constrained = [payload for _, payload in calls if payload.get("source_use_constraints")]
+        assert len(constrained) == 2
+        assert all("externally_supported_fact" not in {
+            use["prose_treatment"] for constraint in payload["source_use_constraints"]
+            for use in constraint["permitted_uses"]
+        } for payload in constrained)
+        assert output["fixed_assets"] == context["fixed_assets"]
+        expected_role = "memo_supported" if repair_target == "source_capability" else "contextual"
+        expected_status = "review_required" if repair_target == "source_capability" else "verified"
+        assert all(use["claim_role"] == expected_role for use in output["evidence_uses"])
+        assert all(use["verification_status"] == expected_status for use in output["evidence_uses"])
     assert output["repair_count"] == 0
     assert output["conclusion_synthesis"]["final_answer"] == data["synthesis"]["final_answer"]
     assert output["conclusion_synthesis"]["established_section_ids"] == ["s1", "s2"]
@@ -4217,6 +4280,11 @@ def test_v31_draft_json_routes_introduction_body_then_conclusion(
             )
             for payload in repair_payloads
         )
+    elif repair_target in {"source_capability", "bibliographic_capability"}:
+        roles = [payload["target_section_contracts"][0]["article_role"]
+                 for payload in repair_payloads]
+        assert roles.count("body") == 2
+        assert roles.count("conclusion") == 1
     elif repair_target != "initial_ids":
         assert all(
             payload["target_section_contracts"][0]["article_role"] == "conclusion"

@@ -44,9 +44,12 @@ from fukamiru.authoring.evidence_contracts import (
     canonical_hash,
     classify_findings,
     compile_draft_evidence,
+    draft_source_use_constraints,
     draft_support_anchor_problems,
+    evidence_use_identity_hash,
     lock_fixed_assets,
     project_argument_evidence_sources,
+    refresh_draft_evidence_identity,
     result_status,
     validate_repair_history,
 )
@@ -54,6 +57,7 @@ from fukamiru.authoring.gates import (
     evaluate_finalization_eligibility,
     evaluate_required_evidence_obligations,
 )
+from fukamiru.authoring.generation import reset_candidate_generation
 from fukamiru.authoring.models import AuditFinding as AuthoringAuditFinding
 from fukamiru.authoring.paragraph_moves import (
     PARAGRAPH_ARGUMENT_MOVE_CATALOG,
@@ -1014,6 +1018,12 @@ class WorkerRunner:
                 )
                 if int(claimed.workflow_version) >= 32:
                     handler_inputs["authoring_run_id"] = claimed.run_id
+                from fukamiru.review_feedback import apply_feedback, feedback_context
+
+                with self.databases.state.connect() as connection:
+                    human_feedback = feedback_context(connection, claimed.run_id)
+                if human_feedback["answers"] or human_feedback["overall_comments"]:
+                    handler_inputs = apply_feedback(handler_inputs, human_feedback)
             with _LeaseHeartbeat(self, claimed):
                 with CodexAuthoringAdapter.observe_invocations(
                     partial(self._record_llm_observation, claimed),
@@ -2740,8 +2750,6 @@ class WorkerRunner:
         if decision not in {"approved", "rejected", "edited", "defer"}:
             raise FukamiruError("Review decision must be approved, rejected, edited, or defer")
         feedback = feedback.strip()
-        if decision == "edited" and not feedback and not (corrected_text or "").strip():
-            raise FukamiruError("Revision requires feedback or corrected_text")
         with self.databases.state.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             allowed_review_statuses = ("open", "rejected") if decision == "edited" else ("open",)
@@ -2756,6 +2764,20 @@ class WorkerRunner:
             if review is None:
                 connection.rollback()
                 raise FukamiruError(f"Revisable review not found: {review_id}")
+            from fukamiru.review_feedback import apply_feedback, feedback_context
+
+            question_feedback = feedback_context(connection, review["run_id"])
+            has_answers = bool(
+                question_feedback["answers"] or question_feedback["overall_comments"]
+            )
+            if decision == "edited" and not feedback and not (corrected_text or "").strip():
+                if not has_answers:
+                    raise FukamiruError("Revision requires feedback or corrected_text")
+                feedback = "人間の個別回答と全体コメントを反映してください。"
+            if has_answers and decision == "edited" and review["object_type"] in {
+                "run_artifact", "authoring_graph_invalid_reference",
+            }:
+                feedback += "\n" + _json(question_feedback)
             if review["node_run_id"] is None:
                 now = utc_now()
                 connection.execute(
@@ -2763,7 +2785,9 @@ class WorkerRunner:
                     UPDATE human_reviews SET status = ?, response_json = ?, resolved_at = ?
                     WHERE id = ?
                     """,
-                    (decision, _json({"decision": decision}), now, review_id),
+                    (decision, _json({"decision": decision, "feedback": feedback,
+                                      "human_question_feedback": question_feedback}),
+                     now, review_id),
                 )
                 connection.commit()
                 EventRepository(connection).append(
@@ -2797,6 +2821,8 @@ class WorkerRunner:
                 connection.rollback()
                 raise FukamiruError("Review is not ready for resolution")
             context = PayloadStore(connection).unpack(json.loads(node["output_json"] or "{}"))
+            if has_answers:
+                context = apply_feedback(context, question_feedback)
             now = utc_now()
             approval_output: dict[str, Any] = {}
             manuscript_polish_repair = str(review["object_type"]) == "manuscript_polish_repair"
@@ -2902,7 +2928,8 @@ class WorkerRunner:
                     raise FukamiruError(
                         "Authoring submission review is attached to the wrong workflow Node"
                     )
-                if decision == "edited":
+                if (decision == "edited"
+                    and str(run_definition["workflow_version"]) not in {"31", "32"}):
                     connection.rollback()
                     raise FukamiruError("An authoring submission can only be approved or rejected")
                 if claim_id:
@@ -2958,6 +2985,7 @@ class WorkerRunner:
                         {
                             "decision": decision,
                             "feedback": feedback,
+                            "human_question_feedback": question_feedback,
                             "claim_id": claim_id if authoring_submission else None,
                             "has_corrected_text": bool((corrected_text or "").strip()),
                         }
@@ -2966,6 +2994,39 @@ class WorkerRunner:
                     review_id,
                 ),
             )
+            if authoring_submission and decision == "edited":
+                revision_context = prose_redraft.supersede_for_repair(context)
+                revision_context["authoring_submission_revalidation"] = {
+                    "review_id": review_id, "reason": "human_question_feedback", "started_at": now,
+                }
+                revision_context["authoring_revision_feedback"] = feedback
+                revision_context.pop("authoring_review_id", None)
+                # A fresh fan-in generation keeps the locked argument and human
+                # blocks, and prevents old completed branches winning the join.
+                next_node = workflow.next_nodes("human_approval", "failure")[0]
+                next_spec = next(item for item in workflow.nodes if item.id == next_node)
+                next_id = str(uuid.uuid4())
+                attempt = self._next_attempt(connection, review["run_id"], next_node)
+                connection.execute(
+                    "UPDATE node_runs SET status='completed',completed_at=? WHERE id=?",
+                    (now, node["id"]),
+                )
+                connection.execute(
+                    "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                    "resource_lane) VALUES(?,?,?,?,'queued',?,?)",
+                    (next_id, review["run_id"], next_node, attempt,
+                     _json(revision_context), next_spec.resource_lane),
+                )
+                connection.execute(
+                    "UPDATE runs SET status='running',output_json=?,error_json=NULL,"
+                    "completed_at=NULL WHERE id=?", (_json(revision_context), review["run_id"]),
+                )
+                connection.commit()
+                EventRepository(connection).append(
+                    review["run_id"], "review.resolved", object_id=review_id,
+                    payload={"decision": "revise", "next_node": next_node},
+                )
+                return {"run_id": review["run_id"], "status": "running", "next_node": next_node}
             if graph_reference_review and decision == "edited":
                 review_packet = dict(context.get("argument_graph_human_review") or {})
                 if str(review_packet.get("review_id") or "") != review_id:
@@ -4915,10 +4976,14 @@ class WorkerRunner:
         self, claimed: ClaimedNode, context: dict[str, Any]
     ) -> HandlerResult:
         """Refresh draft fan-in without reopening the locked argument contracts."""
-        del self, claimed
+        del self
         if not context.get("section_contracts"):
-            raise NonRetryableFukamiruError("Paragraph formation requires locked section contracts")
-        return HandlerResult(dict(context))
+            raise NonRetryableFukamiruError(
+                "Paragraph formation requires locked section contracts"
+            )
+        return HandlerResult(reset_candidate_generation(
+            context, source_node_run_id=claimed.node_run_id,
+        ))
 
     def _authoring_plan_semantic_paragraphs(
         self, claimed: ClaimedNode, context: dict[str, Any]
@@ -6274,6 +6339,12 @@ class WorkerRunner:
         checkpoint: bool = True,
         repair_prose_format: bool = True,
     ) -> dict[str, Any]:
+        from fukamiru.review_feedback import feedback_context
+
+        with self.databases.state.connect() as connection:
+            human_feedback = feedback_context(connection, claimed.run_id)
+        if human_feedback["answers"] or human_feedback["overall_comments"]:
+            payload = {**payload, "human_question_feedback": human_feedback}
         request, key = self._authoring_checkpoint_material(
             claimed,
             stage=stage,
@@ -6875,6 +6946,13 @@ class WorkerRunner:
             return []
         if retrieval_contexts is not None and len(retrieval_contexts) != len(payloads):
             raise ValueError("retrieval_contexts must match authoring payload count")
+        from fukamiru.review_feedback import feedback_context
+
+        with self.databases.state.connect() as connection:
+            human_feedback = feedback_context(connection, claimed.run_id)
+        if human_feedback["answers"] or human_feedback["overall_comments"]:
+            payloads = [{**payload, "human_question_feedback": human_feedback}
+                        for payload in payloads]
         payloads = [
             {
                 **payload,
@@ -7761,6 +7839,67 @@ class WorkerRunner:
                     recorded.append(item)
             return recorded
 
+        excerpt_repairs: list[dict[str, Any]] = []
+
+        def checked_marginal_audit(
+            verdicts: list[dict[str, Any]], originals: list[dict[str, Any]],
+            candidates: list[dict[str, Any]], *, variant: str,
+        ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+            try:
+                return verdicts, audit_marginal_inferences(verdicts, originals, candidates)
+            except NonRetryableFukamiruError as exc:
+                if str(exc) != "V31 reader brief marginal inference excerpts do not match":
+                    raise
+            # Correct quotations, never the semantic judgment or the candidate.
+            # A single attempt must still pass the original exact-match checks.
+            original_audit = deepcopy(verdicts)
+            operation = f"authoring_audit_reader_brief_excerpt_repair_{variant}"
+            result = self._authoring_generate(
+                claimed, "audit_reader_brief_v31", context,
+                payload={
+                    "source_sections": originals, "candidate_sections": candidates,
+                    "original_audit": {"sections": deepcopy(original_audit)},
+                    "repair_instruction": (
+                        "Repair only source_excerpt and candidate_excerpt inside the original "
+                        "audit's marginal_inferences. Each must be a nonempty contiguous "
+                        "verbatim substring of its specified field and item ID in source_sections "
+                        "or candidate_sections respectively. Do not omit intervening list items. "
+                        "Preserve every section, inference, field, item ID, reason, judgment, "
+                        "Japanese/internal issue and every other value exactly. Do not rewrite "
+                        "the input, remove an inference, or upgrade meaning_preserved. Return "
+                        "the complete original audit with only those quotation values corrected."
+                    ),
+                    "output_language": context.get("output_language") or "ja",
+                },
+                operation_name=operation,
+            )
+            repaired = result.get("sections")
+            normalized = deepcopy(repaired)
+            if not isinstance(normalized, list) or len(normalized) != len(original_audit):
+                raise NonRetryableFukamiruError("V31 excerpt repair changed audit decisions")
+            for before, after in zip(original_audit, normalized, strict=True):
+                entries = after.get("marginal_inferences") if isinstance(after, dict) else None
+                original_entries = before["marginal_inferences"]
+                if not isinstance(entries, list) or len(entries) != len(original_entries):
+                    raise NonRetryableFukamiruError("V31 excerpt repair changed audit decisions")
+                for old, new in zip(original_entries, entries, strict=True):
+                    if not isinstance(new, dict) or not all(
+                        field in old for field in ("source_excerpt", "candidate_excerpt")
+                    ):
+                        raise NonRetryableFukamiruError(
+                            "V31 excerpt repair changed audit decisions"
+                        )
+                    for field in ("source_excerpt", "candidate_excerpt"):
+                        new[field] = old[field]
+            if normalized != original_audit:
+                raise NonRetryableFukamiruError("V31 excerpt repair changed audit decisions")
+            inferences = audit_marginal_inferences(repaired, originals, candidates)
+            excerpt_repairs.append({
+                "operation": operation, "original_audit": original_audit,
+                "corrected_audit": deepcopy(repaired),
+            })
+            return repaired, inferences
+
         def audit_passes(item: dict[str, Any]) -> bool:
             if item.get("audit_disagreement_override") is True:
                 return True
@@ -7831,6 +7970,9 @@ class WorkerRunner:
                 raise NonRetryableFukamiruError(
                     "V31 reader brief audit changed section IDs or order"
                 )
+            verdicts, checked_inferences = checked_marginal_audit(
+                verdicts, source_sections, rows, variant=f"round_{round_number}",
+            )
             for issue in audit_issues(verdicts, rows):
                 key = (
                     issue["section_id"],
@@ -7847,7 +7989,7 @@ class WorkerRunner:
                     issue["excerpt"],
                 )
                 internal_issue_ledger.setdefault(key, issue)
-            for inference in audit_marginal_inferences(verdicts, source_sections, rows):
+            for inference in checked_inferences:
                 key = (
                     inference["section_id"],
                     inference["source_field"],
@@ -8001,13 +8143,14 @@ class WorkerRunner:
                 raise NonRetryableFukamiruError(
                     "V31 reader brief repair audit changed section IDs or order"
                 )
-            new_issues = audit_issues(repair_audit, focused_candidate)
-            new_issues.extend(
-                audit_issues(repair_audit, focused_candidate, issue_field="internal_issues")
+            repair_audit, checked_inferences = checked_marginal_audit(
+                repair_audit, focused_source, focused_candidate, variant="focused_repair",
             )
-            for inference in audit_marginal_inferences(
-                repair_audit, focused_source, focused_candidate
-            ):
+            new_issues = audit_issues(repair_audit, focused_candidate)
+            new_issues.extend(audit_issues(
+                repair_audit, focused_candidate, issue_field="internal_issues"
+            ))
+            for inference in checked_inferences:
                 key = (
                     inference["section_id"],
                     inference["source_field"],
@@ -8100,6 +8243,7 @@ class WorkerRunner:
             "marginal_audit_decisions": marginal_audit_decisions,
             "audit_disagreements": audit_disagreements,
             "focused_repair_audit": repair_audit,
+            "marginal_excerpt_repairs": excerpt_repairs,
         }
 
     @staticmethod
@@ -11075,6 +11219,22 @@ class WorkerRunner:
         return sections
 
     @classmethod
+    def _authoring_reviewable_scholarly_qualification(cls, finding: dict[str, Any]) -> bool:
+        """Recognize uncertainty findings without accepting internal workflow phrases."""
+        phrases = finding.get("matched_phrases") or []
+        return (
+            finding.get("code") == "structure_invalid"
+            and bool(phrases) and not finding.get("forbidden_old_text")
+            and all(re.fullmatch(
+                r"(?:未照合|(?:調査|検証)候補|未確認の資料(?:として|にとどまる)?|"
+                r"(?:原作|作品|場面|資料|記録).{0,24}確認されていない|"
+                r"今後(?:の課題として)?検討(?:する|が必要)|"
+                r"確認(?:できる|する|される)まで(?:は)?保留(?:する|される)?)",
+                str(phrase),
+            ) for phrase in phrases)
+        )
+
+    @classmethod
     def _authoring_v31_reader_facing_review_context(
         cls,
         context: dict[str, Any],
@@ -11111,6 +11271,11 @@ class WorkerRunner:
             )
             existing = review_items.get(review_id)
             reason = str(finding.get("message") or "読者向け本文の表現を確認してください。")
+            qualification = cls._authoring_reviewable_scholarly_qualification(finding)
+            if qualification:
+                reason = (
+                    "資料・場面の確認状況についての留保が、本文の解釈を適切に限定しているか"
+                    "確認してください: " + ", ".join(finding["matched_phrases"]))
             if existing is not None:
                 existing["section_id"] = section_id
                 existing["sentence_id"] = paragraph_id or None
@@ -11121,7 +11286,8 @@ class WorkerRunner:
                     review_item_id=review_id,
                     section_id=section_id,
                     sentence_id=paragraph_id or None,
-                    category="japanese_prose_redraft",
+                    category=("scholarly_qualification" if qualification
+                              else "japanese_prose_redraft"),
                     reason=reason,
                     recommended_check="該当段落の日本語と主張・引用の保持を確認する。",
                     blocks_render=False,
@@ -16805,6 +16971,10 @@ class WorkerRunner:
             if isinstance(item, dict)
             and str(item.get("output_block_id") or item.get("block_id") or "")
         }
+        prior_projected_blocks = set(
+            dict(context.get("authoring_citation_lineage_reconciliation") or {}).get(
+                "projected_block_ids") or []
+        )
         argument_evidence_ids: dict[str, list[str]] = {}
         for node in context.get("argument_nodes") or []:
             if not isinstance(node, dict) or node.get("node_type") != "evidence":
@@ -17058,7 +17228,8 @@ class WorkerRunner:
                 }
             )
             has_preserved_section_lineage = any(
-                block_id in prior_citation_lineage_by_block for block_id in body_ids
+                block_id in prior_citation_lineage_by_block or block_id in prior_projected_blocks
+                for block_id in body_ids
             )
             for ordinal, block_id in enumerate(body_ids, start=1):
                 claim_ids = claim_buckets[ordinal - 1] if claim_buckets else []
@@ -17359,6 +17530,7 @@ class WorkerRunner:
             "authoring_paragraph_citation_lineage": citation_lineage,
             "authoring_citation_lineage_reconciliation": {
                 "policy": "visible-attribution-lineage-v1",
+                "projected_block_ids": output_block_ids,
                 "dropped_binding_count": len(citation_lineage_drops),
                 "dropped_bindings": citation_lineage_drops,
             },
@@ -17558,6 +17730,7 @@ class WorkerRunner:
     def _authoring_draft_sections_v31(
         self, claimed: ClaimedNode, context: dict[str, Any]
     ) -> HandlerResult:
+        context = reset_candidate_generation(context, source_node_run_id=claimed.node_run_id)
         context = {
             **context,
             "authoring_v31_source_review_policy": "unresolved-required-citation-to-final-review-v1",
@@ -18135,7 +18308,14 @@ class WorkerRunner:
                 )
             )
             problems.extend(draft_support_anchor_problems(current))
-            problems.extend(self._authoring_v31_render_mapping_problems(context, current))
+            for section in current:
+                problems.extend(
+                    f"section {section['section_id']} source use: {item['error']}"
+                    for item in draft_source_use_constraints(context, section)
+                )
+            problems.extend(
+                self._authoring_v31_render_mapping_problems(context, current)
+            )
             return current, problems
 
         sections, problems = validate_drafts(sections)
@@ -18143,6 +18323,25 @@ class WorkerRunner:
         # audit/repair loop. Counting them as structural repairs can bypass
         # repair_failed_sections even when audit_structure finds major defects.
         draft_contract_repair_count = 0
+
+        def source_repair_fields(section: dict[str, Any]) -> dict[str, Any]:
+            constraints = draft_source_use_constraints(context, section)
+            if not constraints:
+                return {}
+            return {"source_use_constraints": constraints,
+                    "source_use_repair_instruction": (
+                        "Respect the frozen source capabilities. Use a permitted treatment "
+                        "only when the actual prose expresses that limited use. Rewrite "
+                        "unsupported factual assertions as an explicitly attributed user "
+                        "position, qualified interpretation, or limited scholarly context "
+                        "only when the permitted uses "
+                        "support it. Do not merely relabel a factual sentence, invent evidence, "
+                        "change fixed assets, or upgrade source verification. Keep unresolved "
+                        "source content unresolved and preserve the locked claims."
+                        " A verified bibliographic_record establishes identity only, not "
+                        "substantive support for a factual assertion."
+                    )}
+
         for repair_round in (1, 2):
             if citation_mapping_findings:
                 pending_findings = [dict(item) for item in citation_mapping_findings]
@@ -18194,6 +18393,7 @@ class WorkerRunner:
                     repair_payloads.append(
                         {
                             **payload([contract]),
+                            **source_repair_fields(by_id[section_id]),
                             "current_section_draft": by_id[section_id],
                             "repair_constraints": [
                                 problem
@@ -18272,6 +18472,7 @@ class WorkerRunner:
                 ]
                 conclusion_payload = {
                     **payload(conclusion_batch, body_drafts=refreshed_body),
+                    **source_repair_fields(by_id[str(conclusion_batch[0]["section_id"])]),
                     "current_section_draft": by_id[str(conclusion_batch[0]["section_id"])],
                     "repair_constraints": [
                         problem
@@ -18336,6 +18537,7 @@ class WorkerRunner:
                                 by_id[str(contract["section_id"])] for contract in by_role["body"]
                             ],
                         ),
+                        **source_repair_fields(by_id[str(conclusion_batch[0]["section_id"])]),
                         "current_section_draft": by_id[str(conclusion_batch[0]["section_id"])],
                         "repair_constraints": [
                             problem
@@ -18578,6 +18780,9 @@ class WorkerRunner:
                     *contract_language_normalizations,
                 ],
             }
+        )
+        updated = refresh_draft_evidence_identity(
+            updated, evidence_uses, producer_node_run_id=claimed.node_run_id,
         )
         return HandlerResult(
             {
@@ -19308,7 +19513,10 @@ class WorkerRunner:
                 "target_section_contracts": target_contracts,
                 "draft_sections": current_sections,
                 "audit_findings": relevant_findings,
-                "evidence": self._authoring_evidence_projection(context, target_contracts),
+                "human_question_feedback": context.get("human_question_feedback", {}),
+                "evidence": self._authoring_evidence_projection(
+                    context, target_contracts
+                ),
                 "instruction": (
                     "Repair only the supplied affected sections. Resolve each finding by "
                     "narrowing unsupported claims, clarifying scope, or making the missing "
@@ -20574,7 +20782,7 @@ class WorkerRunner:
             repository.save_draft(draft, producer_node_run_id=claimed.node_run_id)
         proposed_html = self._authoring_render_sections(context, sections)
         return HandlerResult(
-            self._authoring_persistence_metadata(
+            refresh_draft_evidence_identity(self._authoring_persistence_metadata(
                 {
                     **context,
                     **self._authoring_v29_plan_bridge(
@@ -20640,7 +20848,7 @@ class WorkerRunner:
                         }.values()
                     ),
                 }
-            )
+            ), evidence_uses, producer_node_run_id=claimed.node_run_id)
         )
 
     def _authoring_polish(self, claimed: ClaimedNode, context: dict[str, Any]) -> HandlerResult:
@@ -20846,17 +21054,7 @@ class WorkerRunner:
                     "Proofreading/candidate reconciliation changed evidence authority: "
                     + ", ".join(invalid_source_uses)
                 )
-            identity_hash = canonical_hash(
-                [
-                    {
-                        "evidence_use_id": item.evidence_use_id,
-                        "claim_id": item.claim_id,
-                        "sentence_id": item.sentence_id,
-                        "source_ids": list(item.source_ids),
-                    }
-                    for item in evidence_uses
-                ]
-            )
+            identity_hash = evidence_use_identity_hash(evidence_uses)
             expected_identity_hash = str(context.get("evidence_identity_hash") or "")
             if expected_identity_hash and expected_identity_hash != identity_hash:
                 raise FukamiruError("Proofreading changed claim/source evidence identity")
@@ -22187,7 +22385,9 @@ class WorkerRunner:
         review_items = [
             dict(item) for item in gate.get("blocking_reasons") or [] if isinstance(item, dict)
         ]
-        review_items.extend(item.model_dump(mode="json") for item in contract_review_items)
+        review_items.extend(
+            item.model_dump(mode="json") for item in contract_review_items if item.status == "open"
+        )
         review_items.extend(
             {
                 "code": "authoring.user_information_required",
@@ -22380,6 +22580,9 @@ class WorkerRunner:
                 "authoring_inference_ledger_v31": inference_ledger,
                 "human_review_items": list(review_items.values()),
             }
+        from fukamiru.review_feedback import apply_feedback
+
+        context = apply_feedback(context, dict(context.get("human_question_feedback") or {}))
         output_root = self.settings.paths.runtime_root / "outputs" / claimed.run_id
         output_root.mkdir(parents=True, exist_ok=True)
         final_path = output_root / "authoring.submission.html"
@@ -22446,6 +22649,7 @@ class WorkerRunner:
                 else str(completion_gate.get("quality_status") or "needs_human_review")
             ),
             review_context={
+                "human_question_feedback": context.get("human_question_feedback", {}),
                 "completion_gate": completion_gate,
                 "finalization_eligibility": eligibility,
                 **(
@@ -22589,6 +22793,7 @@ class WorkerRunner:
             "authoring_result_status": context.get("authoring_result_status", "completed"),
             "review_report_path": context.get("review_report_path"),
             "argument_decision_ledger": build_decision_ledger(context),
+            "human_question_feedback": context.get("human_question_feedback", {}),
             "argument_graph_validation_findings": context.get(
                 "argument_graph_validation_findings", []
             ),
@@ -22657,7 +22862,7 @@ class WorkerRunner:
                         claimed.node_run_id,
                         str(context.get("final_artifact_id") or claimed.run_id),
                         question,
-                        _json(["approved", "rejected"]),
+                        _json(["approved", "rejected", "edited"]),
                         utc_now(),
                     ),
                 )
@@ -34741,6 +34946,7 @@ class WorkerRunner:
             workflow_version=29,
         )
         deferred_internal_language: list[dict[str, Any]] = []
+        deferred_scholarly_qualifications: list[dict[str, Any]] = []
         if (
             is_manuscript_generator_workflow(claimed.workflow_name)
             and int(claimed.workflow_version) >= 31
@@ -34753,16 +34959,27 @@ class WorkerRunner:
                 for item in rendered_findings
                 if item.get("code") == "reader_facing_internal_scaffold"
             ]
+            deferred_scholarly_qualifications = [
+                item for item in rendered_findings
+                if self._authoring_reviewable_scholarly_qualification(item)
+            ]
             hard_findings = [
                 item
                 for item in rendered_findings
                 if item.get("code") != "reader_facing_internal_scaffold"
+                and not self._authoring_reviewable_scholarly_qualification(item)
             ]
             if hard_findings:
                 raise FukamiruError(
                     "V31 rendered manuscript has reader-facing scaffold: "
                     + ", ".join(str(item.get("object_id") or "") for item in hard_findings)
                 )
+            if deferred_scholarly_qualifications:
+                reviewed, _ = self._authoring_v31_reader_facing_review_context({
+                    **context, "proposed_html": normalized_html,
+                    "human_review_items": list(existing_review_items.values())})
+                existing_review_items = {
+                    item["review_item_id"]: item for item in reviewed["human_review_items"]}
 
         boundary_lock = dict(context.get("paragraph_boundary_lock") or {})
         if boundary_lock and normalized_html != source_html:
@@ -34866,6 +35083,7 @@ class WorkerRunner:
                 },
                 "evidence_footnote_render_report": report,
                 "deferred_internal_language_v31": deferred_internal_language,
+                "deferred_scholarly_qualifications_v31": deferred_scholarly_qualifications,
                 "human_review_items": [
                     *[
                         item

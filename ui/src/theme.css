@@ -23,7 +23,7 @@
   --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
   --activity-width: 64px;
   --sidebar-width: clamp(232px, 18vw, 280px);
-  --inspector-width: clamp(284px, 22vw, 340px);
+  --inspector-width: clamp(340px, 36vw, 560px);
   --panel-height: 128px;
   --sidebar-track: var(--sidebar-width);
   --inspector-track: var(--inspector-width);

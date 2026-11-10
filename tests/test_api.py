@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from pypdf import PdfWriter
@@ -1489,11 +1490,11 @@ semantic_enabled = false
         self.assertIn("ふかみる research workspace", response.text)
         self.assertIn("ふかみる Fukamiru", response.text)
         self.assertIn(
-            "styles.css",
+            "styles.css?v=20261109-review-workspace-1",
             response.text,
         )
         self.assertIn(
-            "app.js",
+            "app.js?v=20261109-review-workspace-1",
             response.text,
         )
         self.assertIn('data-activity="review" title="レビュー待ち一覧"', response.text)
@@ -1506,7 +1507,7 @@ semantic_enabled = false
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(response.headers["pragma"], "no-cache")
 
-        javascript = self.client.get("/src/app.js")
+        javascript = self.client.get("/src/app.js?v=20261109-review-workspace-1")
         self.assertEqual(javascript.status_code, 200)
         self.assertEqual(javascript.headers["cache-control"], "no-store, max-age=0")
         self.assertIn('from "./api.js"', javascript.text)
@@ -1515,8 +1516,9 @@ semantic_enabled = false
             javascript.text,
         )
         self.assertIn('from "./run-recovery.js"', javascript.text)
-        self.assertIn("/evidence-review`)", javascript.text)
-        self.assertIn("人間確認リスト", javascript.text)
+        self.assertIn("/feedback`)", javascript.text)
+        self.assertIn("LLMの過剰要求である", javascript.text)
+        self.assertIn('id="review-inspector"', response.text)
 
     def test_translation_source_files_are_independent_of_recent_manuscript_runs(self) -> None:
         with self.app.state.databases.state.connect() as connection:
@@ -1810,6 +1812,27 @@ semantic_enabled = false
             "結論の前にある短い移行段落を直前の意味段落へ統合する。",
         )
         self.assertEqual(child_inputs["instructions"], "章の中心的な主張を明確にする。")
+        feedback_url = f"/api/reviews/manuscript-rewrite:{proposal['id']}/feedback"
+        packet_response = self.client.get(feedback_url)
+        self.assertEqual(packet_response.status_code, 200, packet_response.text)
+        packet = packet_response.json()
+        self.assertIn("中心的な主張を明示した議論。", packet["preview_html"])
+        saved = self.client.put(feedback_url, json={
+            "revision": packet["revision"], "submit": True,
+            "answers": [{"question_id": packet["questions"][0]["question_id"],
+                         "llm_overreach": True}],
+        })
+        self.assertEqual(saved.status_code, 200, saved.text)
+        checkbox_only = self.client.post(
+            f"/api/manuscript-rewrites/{proposal['id']}/revise", json={},
+        )
+        self.assertEqual(checkbox_only.status_code, 202, checkbox_only.text)
+        with self.app.state.databases.state.connect() as connection:
+            revised_inputs = json.loads(connection.execute(
+                "SELECT input_json FROM runs WHERE id=?", (checkbox_only.json()["run_id"],),
+            ).fetchone()[0])
+        self.assertTrue(revised_inputs["human_question_feedback"]["answers"][0]["llm_overreach"])
+        self.assertIn("llm_overreach", revised_inputs["human_review"])
         child_snapshot = self.client.get(revised.json()["snapshot_url"])
         self.assertEqual(child_snapshot.status_code, 200, child_snapshot.text)
         self.assertEqual(
@@ -8943,6 +8966,1217 @@ semantic_enabled = false
             connection.commit()
 
         return target_document_id, artifact_path
+
+    def test_v32_verified_book_correction_replays_footnotes_without_changing_claim_support(self):
+        from fukamiru.storage.payloads import PayloadStore
+
+        error = {"type": "FukamiruError", "message":
+                 "Footnote bibliography metadata requires review: author_unconfirmed"}
+        reference = {"reference_id": "ref-one", "provider": "knowledge_base",
+                     "provider_record_id": "asset-one", "record_type": "document",
+                     "title": "検証太郎_検証の本 (検証出版, 2016)", "authors": [],
+                     "bibliography_people": []}
+        original = {"reference_entries": [reference], "note_text": "著者の原メモ。",
+                    "proposed_html": '<article id="paper"><p id="p1" data-protected="true">'
+                                     '著者の固定本文。</p></article>',
+                    "evidence_context": [{"id": "ev-one", "verification_status": "unverified"}],
+                    "argument_nodes": [{"id": "node-one", "source_ids": ["ev-one"]}]}
+        saved_input = json.dumps(original)
+        packet = {"reference_id": "ref-one", "title": "検証の本", "authors": ["検証太郎"],
+                  "publisher": "検証出版", "year": "2016", "isbn": "9780306406157",
+                  "publication_language": "ja", "source_kind": "publisher",
+                  "source_url": "https://publisher.example/book"}
+        with self.app.state.databases.state.connect() as connection:
+            created = RunRepository(connection).create(
+                workflow_name="manuscript_generator", workflow_version="32",
+                entry_node="reconcile_candidate_context_after_proofreading",
+                inputs={"upstream": "retained"}, project_id=None,
+            )
+            connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                               "WHERE run_id=?", ('{"upstream":"retained"}', created.run_id))
+            connection.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,"
+                "input_json,error_json) VALUES('book-metadata-previous',?,"
+                "'render_evidence_footnotes',1,'failed',?,?)",
+                (created.run_id, saved_input, json.dumps(error)))
+            connection.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,"
+                "input_json,error_json) VALUES('book-metadata-failed',?,"
+                "'render_evidence_footnotes',2,'failed',?,?)",
+                (created.run_id, saved_input, json.dumps(error)))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            connection.commit()
+        url = f"/api/runs/{created.run_id}/replay-failed-authoring-node"
+        self.assertEqual(self.client.post(url).status_code, 409)
+        self.assertEqual(self.client.post(url, json={**packet, "title": "別の本"}).status_code, 409)
+        with self.app.state.databases.state.connect() as connection:
+            row = connection.execute("SELECT input_json,status FROM node_runs WHERE id=?",
+                                     ("book-metadata-failed",)).fetchone()
+            self.assertEqual(tuple(row), (saved_input, "failed"))
+            connection.execute("UPDATE node_runs SET input_json=? WHERE id=?",
+                (json.dumps({**original, "note_text": "別の入力"}), "book-metadata-previous"))
+            connection.commit()
+        self.assertEqual(self.client.post(url, json=packet).status_code, 409)
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute("UPDATE node_runs SET input_json=? WHERE id=?",
+                               (saved_input, "book-metadata-previous"))
+            connection.commit()
+        response = self.client.post(url, json=packet)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["manual_replay_count"], 1)
+        with self.app.state.databases.state.connect() as connection:
+            row = connection.execute("SELECT input_json,status FROM node_runs WHERE id=?",
+                                     ("book-metadata-failed",)).fetchone()
+            updated = PayloadStore(connection).unpack(json.loads(row[0]))
+            self.assertEqual(row[1], "queued")
+            for key in ("note_text", "proposed_html", "evidence_context", "argument_nodes"):
+                self.assertEqual(updated[key], original[key])
+            self.assertEqual(updated["reference_entries"][0]["authors"], ["検証太郎"])
+            self.assertEqual(updated["reference_entries"][0]["provider_record_id"], "asset-one")
+            event = json.loads(connection.execute("SELECT payload_json FROM event_log "
+                "WHERE run_id=? AND event_type='run.failed_authoring_node_replayed'",
+                (created.run_id,)).fetchone()[0])
+            self.assertEqual(event["verified_bibliography_correction"]["previous_node_input_json"],
+                             saved_input)
+            self.assertEqual(event["verified_bibliography_correction"]["source_url"],
+                             packet["source_url"])
+            self.assertEqual(updated["verified_bibliography_metadata_corrections"][0][
+                "previous_reference_metadata"]["title"], reference["title"])
+            upstream = connection.execute("SELECT output_json,status FROM node_runs "
+                "WHERE run_id=? AND node_id='reconcile_candidate_context_after_proofreading'",
+                (created.run_id,)).fetchone()
+            self.assertEqual(tuple(upstream), ('{"upstream":"retained"}', "completed"))
+            previous = connection.execute("SELECT input_json,error_json,status FROM node_runs "
+                "WHERE id='book-metadata-previous'").fetchone()
+            self.assertEqual(tuple(previous), (saved_input, json.dumps(error), "failed"))
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), "book-metadata-failed"))
+            connection.execute("UPDATE runs SET status='failed' WHERE id=?", (created.run_id,))
+            connection.commit()
+        self.assertEqual(self.client.post(url, json=packet).status_code, 409)
+
+    def test_reader_brief_excerpt_failure_replays_once_with_unchanged_checkpoints(self) -> None:
+        error = {"type": "NonRetryableFukamiruError", "message": (
+            "V31 reader brief marginal inference excerpts do not match"
+        )}
+        original_input = json.dumps({
+            "protected_html": "<p>著者の原文。</p>",
+            "human_question_feedback": {"answers": [{"answer": "資料は手元にない。"}]},
+        })
+        with self.app.state.databases.state.connect() as connection:
+            created = RunRepository(connection).create(
+                workflow_name="manuscript_generator", workflow_version="32",
+                entry_node="plan_semantic_paragraphs", inputs={"original": "preserved"},
+                project_id=None,
+            )
+            connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                               "WHERE run_id=?", ('{"plan":"retained"}', created.run_id))
+            connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,error_json) "
+                "VALUES('old-excerpt-history',?,'render_evidence_footnotes',1,'failed','{}',?)",
+                (created.run_id, '{"message":"old bibliography failure"}'),
+            )
+            connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,output_json) "
+                "VALUES('completed-excerpt-history',?,'render_evidence_footnotes',2,"
+                "'completed','{}',?)",
+                (created.run_id, '{"footnotes":"retained"}'),
+            )
+            connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,error_json) "
+                "VALUES('reader-excerpt-failure',?,'draft_rewrite',2,'failed',?,?)",
+                (created.run_id, original_input, json.dumps(error)),
+            )
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            connection.commit()
+        url = f"/api/runs/{created.run_id}/replay-failed-authoring-node"
+        self.assertEqual(self.client.post(url).status_code, 409)  # No saved audit to repair.
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute(
+                "INSERT INTO llm_result_checkpoints(id,run_id,node_run_id,node_id,stage,"
+                "canonical_stage,operation_name,request_fingerprint_sha256,full_prompt_sha256,"
+                "cache_family_sha256,result_json,validation_json,status,created_at,updated_at) "
+                "VALUES('excerpt-checkpoint',?,'reader-excerpt-failure','draft_rewrite',"
+                "'audit_reader_brief_v31','audit_reader_brief_v31','audit',?,?,?,?,?,"
+                "'accepted','2026-11-09','2026-11-09')",
+                (created.run_id, 'a' * 64, 'b' * 64, 'c' * 64, '{"sections":[]}', '{}'),
+            )
+            connection.execute("UPDATE node_runs SET status='cancelled' "
+                               "WHERE id='completed-excerpt-history'")
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)  # Unresolved other failure.
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute("UPDATE node_runs SET status='completed' "
+                               "WHERE id='completed-excerpt-history'")
+            before = [dict(row) for row in connection.execute(
+                "SELECT * FROM node_runs WHERE run_id=? AND id!='reader-excerpt-failure'",
+                (created.run_id,),
+            )]
+            checkpoint = dict(connection.execute(
+                "SELECT * FROM llm_result_checkpoints WHERE id='excerpt-checkpoint'"
+            ).fetchone())
+            connection.commit()
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["node_id"], "draft_rewrite")
+        with self.app.state.databases.state.connect() as connection:
+            node = connection.execute("SELECT * FROM node_runs WHERE id='reader-excerpt-failure'")
+            node = node.fetchone()
+            self.assertEqual(node["input_json"], original_input)
+            self.assertEqual(node["attempt"], 2)
+            self.assertEqual(node["status"], "queued")
+            self.assertEqual([dict(row) for row in connection.execute(
+                "SELECT * FROM node_runs WHERE run_id=? AND id!='reader-excerpt-failure'",
+                (created.run_id,),
+            )], before)
+            self.assertEqual(dict(connection.execute(
+                "SELECT * FROM llm_result_checkpoints WHERE id='excerpt-checkpoint'"
+            ).fetchone()), checkpoint)
+            event = connection.execute("SELECT payload_json FROM event_log WHERE run_id=? "
+                "AND event_type='run.failed_authoring_node_replayed'", (created.run_id,)).fetchone()
+            self.assertEqual(json.loads(event[0])["previous_node_error"], error)
+            self.assertEqual(json.loads(event[0])["policy"],
+                             "authoring-v31-reader-brief-excerpt-recovery-v1")
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? "
+                               "WHERE id='reader-excerpt-failure'", (json.dumps(error),))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+
+    def test_initial_name_sentence_replay_requires_recorded_truncation_and_is_once(self) -> None:
+        original_input = json.dumps({
+            "protected_html": "<p>原文。</p>",
+            "reference_entries": [{"verification_status": "unverified"}],
+            "human_question_feedback": {"answers": [{"answer": "資料は手元にない。"}]},
+        })
+
+        def failed_run(reason: str, *, mixed: bool = False):
+            message = (
+                "V31 role draft JSON handoff violation: section s1 scholarship evidence E1 "
+                "has no semantically confirmed attribution predicate (classification=unclear)"
+            )
+            if mixed:
+                message += "; section s1 has invalid output schema"
+            error = {"type": "NonRetryableFukamiruError", "message": message}
+            with self.app.state.databases.state.connect() as connection:
+                created = RunRepository(connection).create(
+                    workflow_name="manuscript_generator", workflow_version="32",
+                    entry_node="draft_rewrite", inputs=json.loads(original_input), project_id=None,
+                )
+                node_id = connection.execute("SELECT id FROM node_runs WHERE run_id=?",
+                                             (created.run_id,)).fetchone()[0]
+                connection.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                                   (json.dumps(error), node_id))
+                connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                                   (json.dumps(error), created.run_id))
+                result = {"judgments": [{"candidate_id": "initial-candidate",
+                                        "classification": "unclear", "reason": reason}]}
+                connection.execute(
+                    "INSERT INTO llm_result_checkpoints(id,run_id,node_run_id,node_id,stage,"
+                    "canonical_stage,operation_name,request_fingerprint_sha256,full_prompt_sha256,"
+                    "cache_family_sha256,result_json,validation_json,status,created_at,updated_at) "
+                    "VALUES(?,?,?,'draft_rewrite','scholarship_attribution_judgment_v31',"
+                    "'scholarship_attribution_judgment_v31','audit',?,?,?,?,?,'accepted',?,?)",
+                    (created.run_id + '-audit', created.run_id, node_id, 'a' * 64, 'b' * 64,
+                     'c' * 64, json.dumps(result), '{}', utc_now(), utc_now()),
+                )
+                EventRepository(connection).append(
+                    created.run_id, "run.failed_authoring_node_replayed", object_type="node_run",
+                    object_id=node_id, payload={
+                        "policy": "authoring-v31-reader-brief-excerpt-recovery-v1",
+                    },
+                )
+                connection.commit()
+                before = connection.execute("SELECT input_json FROM node_runs WHERE id=?",
+                                            (node_id,)).fetchone()[0]
+            return created.run_id, node_id, error, before, result
+
+        reason = "文が「アレクサ・J.」で途切れており、述語が完結していない。"
+        run_id, node_id, error, before, result = failed_run(reason)
+        url = f"/api/runs/{run_id}/replay-failed-authoring-node"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["manual_replay_count"], 2)
+        with self.app.state.databases.state.connect() as connection:
+            self.assertEqual(connection.execute("SELECT input_json FROM node_runs WHERE id=?",
+                             (node_id,)).fetchone()[0], before)
+            saved = connection.execute("SELECT result_json FROM llm_result_checkpoints WHERE id=?",
+                                       (run_id + '-audit',)).fetchone()[0]
+            self.assertEqual(json.loads(saved), result)
+            event = connection.execute("SELECT payload_json FROM event_log WHERE run_id=? "
+                "AND event_type='run.failed_authoring_node_replayed' ORDER BY rowid DESC LIMIT 1",
+                (run_id,)).fetchone()[0]
+            self.assertEqual(json.loads(event)["policy"],
+                             "authoring-v31-initial-name-sentence-recovery-v1")
+            self.assertEqual(json.loads(event)["previous_node_error"], error)
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), node_id))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), run_id))
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+        for other_reason, mixed in [("文に「K.」があるが帰属は不明である。", False),
+                                    (reason, True)]:
+            other_id, *_ = failed_run(other_reason, mixed=mixed)
+            self.assertEqual(self.client.post(
+                f"/api/runs/{other_id}/replay-failed-authoring-node"
+            ).status_code, 409)
+
+    def test_proofreading_generation_recovery_preserves_old_rows_and_requires_new_scope(
+        self,
+    ) -> None:
+        from fukamiru.revisions.sentence_proofreading import digest, extract_sentences
+        from fukamiru.revisions.service import RevisionService
+
+        old_html = '<article id="d" lang="ja"><p id="p">旧文を検討する。</p></article>'
+        new_html = '<article id="d" lang="ja"><p id="p">新文を検討する。</p></article>'
+        error = {'type':'FukamiruError','message':'proofreading.source_checkpoint_changed'}
+
+        def failed_run(*, same_text=False, no_marker=False, existing_scope=False,
+                       unproven_history=False):
+            with self.app.state.databases.state.connect() as c:
+                revisions = RevisionService(c)
+                root_index = c.execute('SELECT COUNT(*) FROM projects').fetchone()[0]
+                project = revisions.register_project(name='校正',
+                    root_path=f'/proofreading-test-{root_index}')
+                document = revisions.create_document(project_id=project, kind='paper', title='校正')
+                context = {'document_id':document, 'proposed_html':new_html,
+                    'draft_evidence_identity_generation':{'producer_node_run_id':'new-draft'},
+                    'prior_candidate_generations':[{'source_node_run_id':'old-input'}]}
+                if no_marker:
+                    context.pop('draft_evidence_identity_generation')
+                created = RunRepository(c).create(workflow_name='manuscript_generator',
+                    workflow_version='32', entry_node='review_japanese_sections',
+                    inputs=context, project_id=project)
+                run_id = created.run_id
+                c.execute("UPDATE node_runs SET status='completed',output_json=? WHERE run_id=?",
+                          (json.dumps(context),run_id))
+                footnote_error = {'type':'FukamiruError','message':'old footnote failure'}
+                for attempt in (2,3):
+                    c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "error_json) VALUES(?,?,'render_evidence_footnotes',?,'failed','{}',?)",
+                        (run_id+f'-old-{attempt}',run_id,attempt,json.dumps(footnote_error)))
+                c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                    "output_json) VALUES(?,?,'reconcile_candidate_context',3,?,'{}','{}')",
+                    (run_id+'-recovered',run_id,'failed' if unproven_history else 'completed'))
+                EventRepository(c).append(run_id,'run.failed_authoring_node_replayed',payload={
+                    'policy':'authoring-v31-stale-candidate-generation-recovery-v1',
+                    'node_id':'render_evidence_footnotes','target_node_run_id':run_id+'-recovered',
+                    'input_sha256':hashlib.sha256(b'{}').hexdigest(),
+                    'previous_node_error':footnote_error})
+                inputs = json.dumps(context)
+                c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                    "error_json) VALUES(?,?,'extract_proofreading_sentences',2,'failed',?,?)",
+                    (run_id+'-extract',run_id,inputs,json.dumps(error)))
+                sentence = extract_sentences(new_html if same_text else old_html,
+                    run_id=run_id,document_id=document)[0]
+                c.execute("INSERT INTO manuscript_proofreading_sentences "
+                    "(id,run_id,document_id,source_sentence_id,block_id,sentence_ordinal,"
+                    "start_offset,end_offset,original_text,original_hash,created_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,'now')",[sentence[k] for k in (
+                        'id','run_id','document_id','source_sentence_id','block_id',
+                        'sentence_ordinal','start_offset','end_offset','original_text',
+                        'original_hash')])
+                if existing_scope:
+                    c.execute("INSERT INTO manuscript_proofreading_generations VALUES "
+                        "(?,?,'changed-source','producer','now')",(run_id,'authoring:new-draft'))
+                c.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                          (json.dumps(error),run_id))
+                c.commit()
+                before=[dict(row) for row in c.execute('SELECT * FROM node_runs WHERE run_id=?',
+                                                       (run_id,))]
+                old=dict(c.execute('SELECT * FROM manuscript_proofreading_sentences WHERE run_id=?',
+                                   (run_id,)).fetchone())
+            return run_id,inputs,before,old
+
+        run_id,inputs,before,old=failed_run()
+        url=f'/api/runs/{run_id}/replay-failed-authoring-node'
+        response=self.client.post(url)
+        self.assertEqual(response.status_code,200,response.text)
+        with self.app.state.databases.state.connect() as c:
+            for row in before:
+                current=dict(c.execute('SELECT * FROM node_runs WHERE id=?',
+                                       (row['id'],)).fetchone())
+                if row['id']==run_id+'-extract':
+                    self.assertEqual(current['input_json'],inputs)
+                    self.assertEqual(current['status'],'queued')
+                else:
+                    self.assertEqual(current,row)
+            self.assertEqual(dict(c.execute('SELECT * FROM manuscript_proofreading_sentences '
+                                           'WHERE run_id=?',(run_id,)).fetchone()),old)
+            event=json.loads(c.execute("SELECT payload_json FROM event_log WHERE run_id=? AND "
+                "event_type='run.failed_authoring_node_replayed' ORDER BY rowid DESC LIMIT 1",
+                (run_id,)).fetchone()[0])
+            self.assertEqual(event['policy'],'authoring-v31-proofreading-generation-recovery-v1')
+            self.assertEqual(event['previous_node_error'],error)
+            self.assertEqual(event['proofreading_generation']['source_html_sha256'],digest(new_html))
+            c.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                      (json.dumps(error),run_id+'-extract'))
+            c.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                      (json.dumps(error),run_id))
+            c.commit()
+        self.assertEqual(self.client.post(url).status_code,409)
+        for kwargs in ({'same_text':True},{'no_marker':True},{'existing_scope':True},
+                       {'unproven_history':True}):
+            other,_,_,_=failed_run(**kwargs)
+            self.assertEqual(self.client.post(
+                f'/api/runs/{other}/replay-failed-authoring-node').status_code,409)
+        missing,_,_,_=failed_run()
+        with self.app.state.databases.state.connect() as c:
+            c.execute('DELETE FROM schema_migrations WHERE version=?',
+                      ('0055_manuscript_proofreading_generations',))
+            c.commit()
+        self.assertEqual(self.client.post(
+            f'/api/runs/{missing}/replay-failed-authoring-node').status_code,409)
+
+    def test_submission_marker_recovery_requires_review_and_pending_proposal(self) -> None:
+        from fukamiru.authoring.evidence_contracts import canonical_hash
+        from fukamiru.storage.payloads import PayloadStore
+
+        self._create_authoring_review_fixture()
+        url = '/api/reviews/review-authoring-review/feedback'
+        packet = self.client.get(url).json()
+        self.assertEqual(self.client.put(url, json={'revision':0,'submit':True,
+            'answers':[{'question_id':packet['questions'][0]['question_id'],
+                        'answer':'資料は手元にない。'}]}).status_code, 200)
+        self.assertEqual(self.client.post('/api/reviews/review-authoring-review/resolve',
+                                         json={'decision':'revise'}).status_code, 200)
+        with self.app.state.databases.state.connect() as c:
+            run = c.execute("SELECT run_id FROM human_reviews WHERE id='review-authoring-review'"
+                            ).fetchone()[0]
+            row = c.execute("SELECT * FROM node_runs WHERE run_id=? AND status='queued'",
+                            (run,)).fetchone()
+            source = PayloadStore(c).unpack(json.loads(row['input_json']))
+            pending = dict(c.execute('SELECT * FROM authoring_pending_proposals WHERE run_id=?',
+                                      (run,)).fetchone())
+            for key in ('source_document_id','source_revision_id','plan_id','plan_revision'):
+                source[key] = pending[key]
+            source['document_id'] = pending['target_document_id']
+            marker = source['authoring_submission_revalidation']
+            current = {key:value for key,value in source.items()
+                       if key != 'authoring_submission_revalidation'}
+            html = pending['proposed_html'].replace('本文。','回答を反映した本文。')
+            current.update({'proposed_html':html,
+                'frozen_candidate_v26':{'html_sha256':hashlib.sha256(html.encode()).hexdigest()},
+                'prior_candidate_generations':[{'source_node_run_id':row['id'],'cleared_fields':{
+                    'authoring_submission_revalidation':canonical_hash(marker)}}]})
+            c.execute("UPDATE node_runs SET status='completed',input_json=? WHERE id=?",
+                      (json.dumps(source),row['id']))
+            error = {'type':'ValueError','message':'authoring run already has a pending proposal'}
+            c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,"
+                "input_json,error_json) "
+                "VALUES('marker-finalize-failed',?,'finalize_authoring',2,'failed',?,?)",
+                (run,json.dumps(current),json.dumps(error)))
+            c.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                      (json.dumps(error),run))
+            c.execute("UPDATE human_reviews SET status='open' WHERE id='review-authoring-review'")
+            c.commit()
+        replay_url = f'/api/runs/{run}/replay-failed-authoring-node'
+        self.assertEqual(self.client.post(replay_url).status_code, 409)
+        with self.app.state.databases.state.connect() as c:
+            c.execute("UPDATE human_reviews SET status='edited' WHERE id='review-authoring-review'")
+            c.execute("UPDATE authoring_pending_proposals SET status='confirmed',"
+                      "confirmed_revision_id=?,resolved_at=? WHERE run_id=?",
+                      (pending['source_revision_id'],utc_now(),run))
+            c.commit()
+        self.assertEqual(self.client.post(replay_url).status_code, 409)
+        with self.app.state.databases.state.connect() as c:
+            c.execute("UPDATE authoring_pending_proposals SET status='pending',"
+                      "confirmed_revision_id=NULL,resolved_at=NULL WHERE run_id=?", (run,))
+            c.commit()
+            before = [dict(r) for r in c.execute('SELECT * FROM node_runs WHERE run_id=?',(run,))]
+        response = self.client.post(replay_url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['node_id'],'finalize_authoring')
+        self.assertEqual(response.json()['attempt'],3)
+        with self.app.state.databases.state.connect() as c:
+            for old in before:
+                self.assertEqual(dict(c.execute('SELECT * FROM node_runs WHERE id=?',
+                                               (old['id'],)).fetchone()),old)
+            data = PayloadStore(c).unpack(json.loads(c.execute(
+                'SELECT input_json FROM node_runs WHERE id=?',
+                (response.json()['node_run_id'],)).fetchone()[0]))
+            self.assertTrue(all(data[key]==value for key,value in current.items()))
+            self.assertEqual(data['authoring_submission_revalidation'],marker)
+            self.assertEqual(dict(c.execute('SELECT * FROM authoring_pending_proposals '
+                                           'WHERE run_id=?',(run,)).fetchone()),pending)
+        self.assertEqual(self.client.post(replay_url).status_code,409)
+
+    def test_rendered_qualification_recovery_preserves_input_and_verified_history(self) -> None:
+        from test_scholarly_qualification import qualification_fixture
+
+        error = {"type": "FukamiruError", "message":
+                 "V31 rendered manuscript has reader-facing scaffold: SEC-plan-s2"}
+
+        def failed_run(unproven=False):
+            context = qualification_fixture()
+            with self.app.state.databases.state.connect() as c:
+                created = RunRepository(c).create(workflow_name="manuscript_generator",
+                    workflow_version="32", entry_node="draft_rewrite", inputs=context,
+                    project_id=None)
+                run = created.run_id
+                c.execute("UPDATE node_runs SET status='completed' WHERE run_id=?", (run,))
+                for attempt, policy in [(3, "stale-candidate-generation"),
+                                         (4, "empty-citation-projection")]:
+                    c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "error_json) VALUES(?,?,'render_evidence_footnotes',?,'failed','{}',?)",
+                        (run+f'-old-{attempt}', run, attempt, '{"message":"old failure"}'))
+                    target = run+f'-target-{attempt}'
+                    c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json) "
+                        "VALUES(?,?,'reconcile_candidate_context_after_proofreading',?,?,'{}')",
+                        (target, run, attempt, "failed" if unproven and attempt == 4
+                         else "completed"))
+                    EventRepository(c).append(run, 'run.failed_authoring_node_replayed', payload={
+                        'policy':f'authoring-v31-{policy}-recovery-v1',
+                        'node_id':'render_evidence_footnotes','target_node_run_id':target,
+                        'input_sha256':hashlib.sha256(b'{}').hexdigest(),
+                        'previous_node_error':{'message':'old failure'}})
+                c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                    "error_json) VALUES(?,?,'render_evidence_footnotes',5,'failed',?,?)",
+                    (run+'-failed', run, json.dumps(context), json.dumps(error)))
+                c.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                          (json.dumps(error), run))
+                c.commit()
+                before = [dict(r) for r in c.execute(
+                    'SELECT * FROM node_runs WHERE run_id=?', (run,))]
+            return run, before
+
+        run, before = failed_run()
+        url = f'/api/runs/{run}/replay-failed-authoring-node'
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['attempt'], 5)
+        with self.app.state.databases.state.connect() as c:
+            for old in before:
+                current = dict(c.execute('SELECT * FROM node_runs WHERE id=?',
+                                         (old['id'],)).fetchone())
+                if old['id'] == run+'-failed':
+                    self.assertEqual(current['status'], 'queued')
+                    self.assertEqual(current['input_json'], old['input_json'])
+                else:
+                    self.assertEqual(current, old)
+            event = json.loads(c.execute("SELECT payload_json FROM event_log WHERE run_id=? AND "
+                "event_type='run.failed_authoring_node_replayed' ORDER BY rowid DESC LIMIT 1",
+                (run,)).fetchone()[0])
+            self.assertEqual(event['previous_node_error'], error)
+            self.assertEqual(event['qualification_review']['resolution_route'],
+                             'prose_redraft_then_human_review')
+            c.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                      (json.dumps(error), run+'-failed'))
+            c.execute("UPDATE runs SET status='failed' WHERE id=?", (run,))
+            c.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+        unproven, _ = failed_run(unproven=True)
+        self.assertEqual(self.client.post(
+            f'/api/runs/{unproven}/replay-failed-authoring-node').status_code, 409)
+
+    def test_empty_citation_projection_recovery_preserves_failed_node_and_is_once(self) -> None:
+        from test_authoring_generation import EMPTY_PROJECTION_ERROR, empty_projection_fixture
+
+        from fukamiru.storage.payloads import PayloadStore
+
+        context = empty_projection_fixture()
+        error = {"type": "FukamiruError", "message": EMPTY_PROJECTION_ERROR}
+        with self.app.state.databases.state.connect() as connection:
+            created = RunRepository(connection).create(workflow_name="manuscript_generator",
+                workflow_version="32", entry_node="reconcile_candidate_context_after_proofreading",
+                inputs=context, project_id=None)
+            connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                               "WHERE run_id=?",
+                               (json.dumps(context), created.run_id))
+            connection.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                "error_json) VALUES('empty-projection-failed',?,'render_evidence_footnotes',4,"
+                "'failed',?,?)", (created.run_id, json.dumps(context), json.dumps(error)))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            connection.commit()
+            before = [dict(row) for row in connection.execute(
+                "SELECT * FROM node_runs WHERE run_id=?", (created.run_id,))]
+        url = f"/api/runs/{created.run_id}/replay-failed-authoring-node"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["node_id"],
+                         "reconcile_candidate_context_after_proofreading")
+        with self.app.state.databases.state.connect() as connection:
+            for node in before:
+                self.assertEqual(dict(connection.execute("SELECT * FROM node_runs WHERE id=?",
+                                                         (node["id"],)).fetchone()), node)
+            new = connection.execute("SELECT input_json FROM node_runs WHERE id=?",
+                                     (response.json()["node_run_id"],)).fetchone()[0]
+            corrected = PayloadStore(connection).unpack(json.loads(new))
+            for key in ("proposed_html", "draft_sections", "fixed_assets", "evidence_uses",
+                        "human_question_feedback", "manuscript_proofreading_shadow"):
+                self.assertEqual(corrected[key], context[key])
+            self.assertEqual(len(corrected["applied_edits"]), 1)
+            event = json.loads(connection.execute("SELECT payload_json FROM event_log WHERE "
+                "run_id=? AND event_type='run.failed_authoring_node_replayed' ORDER BY rowid DESC "
+                "LIMIT 1", (created.run_id,)).fetchone()[0])
+            self.assertEqual(event["previous_node_error"], error)
+            self.assertEqual(event["input_sha256"], hashlib.sha256(
+                json.dumps(context).encode()).hexdigest())
+            connection.execute("UPDATE node_runs SET status='completed' WHERE id=?",
+                               (response.json()["node_run_id"],))
+            connection.execute("UPDATE runs SET status='failed' WHERE id=?", (created.run_id,))
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+
+    def test_stale_candidate_projection_recovery_retains_failures_and_restarts_audits(self) -> None:
+        from fukamiru.authoring.evidence_contracts import (
+            build_fixed_assets,
+            compile_draft_evidence,
+            evidence_use_identity_hash,
+        )
+        from fukamiru.storage.payloads import PayloadStore
+        from fukamiru.worker.runner import WorkerRunner
+
+        def failed_run(*, tampered=False, same_candidate=False, missing_gate=False):
+            context = {"plan_id": "plan", "language": "ja", "draft_attempt": 2,
+                "propositions": [{"id": "P1", "text": "著者の考え。"}],
+                "evidence_context": [{"id": "B1", "title": "資料名", "author": "著者B",
+                    "reference_id": "R1",
+                    "verification_status": "verified"}],
+                "reference_entries": [{"reference_id": "R1", "title": "資料名",
+                                       "author": "著者B", "year": "2020", "evidence_ids": ["B1"]}],
+                "argument_nodes": [{"id": "E1", "node_type": "evidence", "claim_id": "C1",
+                    "provenance": {"source_ids": ["B1"]}},
+                    {"id": "E2", "node_type": "evidence", "claim_id": "C2",
+                     "provenance": {"source_ids": ["P1"]}}]}
+            context['fixed_assets'] = build_fixed_assets(context).model_dump(mode='json')
+            context['section_contracts'] = [{"section_id": sid, "title": sid,
+                "article_role": role, "claim_ids": [claim], "evidence_ids": [evidence],
+                "development_expectations": {"required_argument_moves": []}}
+                for sid, role, claim, evidence in [('s1', 'body', 'C1', 'E1'),
+                                                  ('s2', 'conclusion', 'C2', 'E2')]]
+            sections = [{"section_id": sid, "article_role": role, "claim_ids": [claim],
+                "text": text, "paragraphs": [{"text": text, "evidence_ids": [evidence],
+                                               "move_indices": []}],
+                "evidence_treatment": [{"evidence_id": evidence, "claim_id": claim,
+                    "prose_treatment": treatment, "support_sentence": text}]}
+                for sid, role, claim, evidence, text, treatment in [
+                    ('s1', 'body', 'C1', 'E1', '著者Bの『資料名』を比較の枠として参照する。',
+                     'attributed_scholarship'),
+                    ('s2', 'conclusion', 'C2', 'E2', '著者は二つの条件を区別する。',
+                     'qualified_interpretation')]]
+            sections, uses, _, _ = compile_draft_evidence(context, sections)
+            context.update({'draft_sections': sections,
+                            'evidence_uses': [use.model_dump(mode='json') for use in uses],
+                            'evidence_identity_hash': evidence_use_identity_hash(uses)})
+            html = WorkerRunner._authoring_render_sections(context, sections)
+            context['proposed_html'] = html
+            context['submission_validation_gate'] = {'failed_validations': ['references'],
+                'candidate_sha256': hashlib.sha256(html.encode()).hexdigest()
+                if same_candidate else '0' * 64}
+            if missing_gate:
+                context.pop('submission_validation_gate')
+            context['evidence_footnote_render_report'] = {'old_generation': True}
+            context['authoring_paragraph_citation_lineage'] = [{
+                'output_block_id': 'P-plan-s2-001', 'evidence_ids': ['B1'],
+                'argument_evidence_node_ids': ['E1']}]
+            current = {**context, **WorkerRunner._authoring_v29_plan_bridge(
+                context, html, semantic_attribution=True)}
+            current.pop('submission_validation_gate', None)
+            if tampered:
+                current['evidence_uses'] = [{**use, 'verification_status': 'verified'}
+                                            for use in current['evidence_uses']]
+            error = {'type': 'FukamiruError', 'message': (
+                'Authoring footnote needs a unique visible source mention '
+                'in its cited sentence: P-plan-s2-001')}
+            with self.app.state.databases.state.connect() as connection:
+                created = RunRepository(connection).create(
+                    workflow_name='manuscript_generator', workflow_version='32',
+                    entry_node='reconcile_candidate_context', inputs=context, project_id=None)
+                connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                    "WHERE run_id=?", (json.dumps(current), created.run_id))
+                for attempt in (2, 3):
+                    connection.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,"
+                        "input_json,error_json) VALUES(?,?,'render_evidence_footnotes',?,"
+                        "'failed',?,?)",
+                        (created.run_id + f'-{attempt}', created.run_id, attempt,
+                         json.dumps(current), json.dumps(error)))
+                connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                                   (json.dumps(error), created.run_id))
+                connection.commit()
+                before = [dict(row) for row in connection.execute(
+                    "SELECT * FROM node_runs WHERE run_id=?", (created.run_id,))]
+            return created.run_id, before, current
+
+        run_id, before, original = failed_run()
+        response = self.client.post(f'/api/runs/{run_id}/replay-failed-authoring-node')
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['node_id'], 'reconcile_candidate_context')
+        with self.app.state.databases.state.connect() as connection:
+            for old in before:
+                self.assertEqual(dict(connection.execute('SELECT * FROM node_runs WHERE id=?',
+                                                         (old['id'],)).fetchone()), old)
+            target = connection.execute('SELECT * FROM node_runs WHERE id=?',
+                                         (response.json()['node_run_id'],)).fetchone()
+            corrected = PayloadStore(connection).unpack(json.loads(target['input_json']))
+            for key in ['proposed_html', 'draft_sections', 'evidence_uses', 'fixed_assets',
+                        'argument_nodes', 'reference_entries']:
+                self.assertEqual(corrected[key], original[key])
+            self.assertNotIn('evidence_footnote_render_report', corrected)
+            self.assertNotIn('submission_validation_gate', corrected)
+            conclusion = [item for item in corrected['authoring_paragraph_citation_lineage']
+                          if item['authoring_section_id'] == 's2']
+            self.assertEqual(conclusion, [])
+            self.assertTrue(corrected['authoring_paragraph_citation_lineage'])
+            runner = object.__new__(WorkerRunner)
+            runner._authoring_v31_judge_attribution_predicates = lambda *args: {}
+            result = runner._authoring_reconcile_candidate_context(SimpleNamespace(
+                node_id='reconcile_candidate_context', workflow_version='32'), corrected)
+            self.assertEqual(result.outcome, 'success')
+        self.assertEqual(self.client.post(
+            f'/api/runs/{run_id}/replay-failed-authoring-node').status_code, 409)
+        for kwargs in ({'tampered': True}, {'same_candidate': True}, {'missing_gate': True}):
+            other, _, _ = failed_run(**kwargs)
+            self.assertEqual(self.client.post(
+                f'/api/runs/{other}/replay-failed-authoring-node').status_code, 409)
+
+    def test_stale_draft_evidence_baseline_replay_requires_intact_compiled_producer(self) -> None:
+        from fukamiru.authoring.evidence_contracts import (
+            build_fixed_assets,
+            compile_draft_evidence,
+            evidence_use_identity_hash,
+        )
+        from fukamiru.storage.payloads import PayloadStore
+
+        error = {"type": "FukamiruError", "message":
+                 "Proofreading changed claim/source evidence identity"}
+
+        def failed_run(*, tamper_current=False, tamper_producer=False, same_generation=False,
+                       proofreading=False, wrong_old_hash=False, unrelated_error=False):
+            before = {"propositions": [{"id": "P1", "text": "著者の見解一。"},
+                                       {"id": "P2", "text": "著者の見解二。"}]}
+            before["fixed_assets"] = build_fixed_assets(before).model_dump(mode="json")
+            sections = [{"section_id": "S1", "paragraphs": [{
+                "text": "著者の見解一。著者の見解二。", "evidence_ids": ["P1", "P2"],
+            }], "evidence_treatment": [{"evidence_id": source, "claim_id": "C" + source,
+                "prose_treatment": "attributed_user_statement", "support_sentence": text}
+                for source, text in (("P1", "著者の見解一。"), ("P2", "著者の見解二。"))]}]
+            old_sections, old_uses, _, _ = compile_draft_evidence(before, sections)
+            old_hash = evidence_use_identity_hash(old_uses)
+            before.update({"draft_attempt": 1, "draft_sections": old_sections,
+                "evidence_uses": [use.model_dump(mode="json") for use in old_uses],
+                "evidence_identity_hash": "wrong" if wrong_old_hash else old_hash,
+                "proofreading_evidence_identity_validation": {
+                    "passed": True, "identity_hash": old_hash, "evidence_use_count": 2}})
+            sections[0]["paragraphs"] = [{"text": "著者の見解一。", "evidence_ids": ["P1"]}]
+            sections[0]["evidence_treatment"] = sections[0]["evidence_treatment"][:1]
+            new_sections, new_uses, _, _ = compile_draft_evidence(before, sections)
+            produced = {**before, "draft_attempt": 1 if same_generation else 2,
+                "draft_sections": new_sections,
+                "proposed_html": "<article>著者の見解一。</article>",
+                "evidence_uses": [use.model_dump(mode="json") for use in new_uses]}
+            if tamper_producer:
+                produced["evidence_uses"][0]["verification_status"] = "verified"
+            current = json.loads(json.dumps(produced))
+            if tamper_current:
+                current["evidence_uses"][0]["source_ids"] = ["P2"]
+            failure = {**error, "message": "different error"} if unrelated_error else error
+            inputs = json.dumps(current)
+            with self.app.state.databases.state.connect() as connection:
+                created = RunRepository(connection).create(
+                    workflow_name="manuscript_generator", workflow_version="32",
+                    entry_node="draft_rewrite", inputs=before, project_id=None,
+                )
+                connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                    "WHERE run_id=?", (json.dumps(produced), created.run_id))
+                producer = dict(connection.execute("SELECT * FROM node_runs WHERE run_id=?",
+                                                   (created.run_id,)).fetchone())
+                connection.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,"
+                    "input_json,error_json) VALUES(?,?,?,2,'failed',?,?)",
+                    (created.run_id + '-failed', created.run_id,
+                     'reconcile_candidate_context_after_proofreading' if proofreading
+                     else 'reconcile_candidate_context', inputs, json.dumps(failure)))
+                connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                                   (json.dumps(failure), created.run_id))
+                connection.commit()
+            return created.run_id, current, inputs, producer
+
+        run_id, original, inputs, producer = failed_run()
+        url = f"/api/runs/{run_id}/replay-failed-authoring-node"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        with self.app.state.databases.state.connect() as connection:
+            node = connection.execute("SELECT * FROM node_runs WHERE id=?",
+                                      (run_id + '-failed',)).fetchone()
+            corrected = PayloadStore(connection).unpack(json.loads(node['input_json']))
+            self.assertEqual(node['status'], 'queued')
+            for key in ['fixed_assets', 'evidence_uses', 'draft_sections', 'proposed_html']:
+                self.assertEqual(corrected[key], original[key])
+            self.assertNotEqual(corrected['evidence_identity_hash'],
+                                original['evidence_identity_hash'])
+            event = json.loads(connection.execute("SELECT payload_json FROM event_log "
+                "WHERE run_id=? AND event_type='run.failed_authoring_node_replayed'",
+                (run_id,)).fetchone()[0])
+            self.assertEqual(event['policy'], 'authoring-v31-draft-evidence-generation-recovery-v1')
+            correction = event['evidence_generation_correction']
+            self.assertEqual(PayloadStore(connection).unpack(
+                correction['previous_node_input'])['input_json'], inputs)
+            self.assertEqual(event['previous_node_error'], error)
+            self.assertEqual(dict(connection.execute("SELECT * FROM node_runs WHERE id=?",
+                                                     (producer['id'],)).fetchone()), producer)
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), run_id + '-failed'))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), run_id))
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+        for kwargs in ({'tamper_current': True}, {'tamper_producer': True},
+                       {'same_generation': True}, {'proofreading': True},
+                       {'wrong_old_hash': True}, {'unrelated_error': True}):
+            other, _, _, _ = failed_run(**kwargs)
+            self.assertEqual(self.client.post(
+                f"/api/runs/{other}/replay-failed-authoring-node"
+            ).status_code, 409)
+
+    def test_source_use_contract_replay_preserves_same_input_failures_and_frozen_assets(
+        self,
+    ) -> None:
+        from fukamiru.authoring.evidence_contracts import build_fixed_assets
+
+        error = {"type": "FukamiruError", "message": (
+            "draft evidence E1 does not support claim role source_fact: B1"
+        )}
+
+        def failed_run(*, fact_source=False, memo_source=False, different_input=False,
+                       mixed_error=False):
+            source = {"id": "B1", "title": "書誌情報だけ", "verification_status": "verified"}
+            if fact_source:
+                source.update({"text": "確認済み本文", "source_span_id": "SPAN1"})
+            context = {"evidence_context": [source], "argument_nodes": [{
+                "id": "E1", "node_type": "evidence", "provenance": {"source_ids": ["B1"]},
+            }], "human_question_feedback": {"answers": [{"answer": "資料は手元にない。"}]}}
+            if memo_source:
+                context["evidence_context"] = []
+                context["propositions"] = [{"id": "B1", "text": "著者のメモ。"}]
+            context["fixed_assets"] = build_fixed_assets(context).model_dump(mode="json")
+            inputs = json.dumps(context)
+            failure = {**error, "message": error["message"] + (
+                "; unrelated failure" if mixed_error else ""
+            )}
+            with self.app.state.databases.state.connect() as connection:
+                created = RunRepository(connection).create(
+                    workflow_name="manuscript_generator", workflow_version="32",
+                    entry_node="draft_rewrite", inputs=context, project_id=None,
+                )
+                connection.execute("UPDATE node_runs SET status='completed',output_json='{}' "
+                                   "WHERE run_id=?", (created.run_id,))
+                for attempt in (2, 3):
+                    old_input = json.dumps({**context, "other_input": True}) if (
+                        different_input and attempt == 2
+                    ) else inputs
+                    connection.execute(
+                        "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                        "error_json) VALUES(?,?,'draft_rewrite',?,'failed',?,?)",
+                        (created.run_id + f'-{attempt}', created.run_id, attempt, old_input,
+                         json.dumps(failure)),
+                    )
+                connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                                   (json.dumps(failure), created.run_id))
+                connection.commit()
+            return created.run_id, inputs
+
+        run_id, inputs = failed_run()
+        url = f"/api/runs/{run_id}/replay-failed-authoring-node"
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["attempt"], 3)
+        with self.app.state.databases.state.connect() as connection:
+            nodes = connection.execute(
+                "SELECT * FROM node_runs WHERE run_id=? AND attempt IN (2,3) ORDER BY attempt",
+                (run_id,),
+            ).fetchall()
+            self.assertEqual([row["input_json"] for row in nodes], [inputs, inputs])
+            self.assertEqual(nodes[0]["status"], "failed")
+            self.assertEqual(json.loads(nodes[0]["error_json"]), error)
+            self.assertEqual(nodes[1]["status"], "queued")
+            event = json.loads(connection.execute("SELECT payload_json FROM event_log "
+                "WHERE run_id=? AND event_type='run.failed_authoring_node_replayed' "
+                "ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()[0])
+            self.assertEqual(event["policy"], "authoring-v31-source-use-contract-recovery-v1")
+            self.assertEqual(event["previous_node_error"], error)
+            self.assertEqual(event["source_use_constraints"][0]["permitted_uses"][0]["claim_role"],
+                             "contextual")
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), run_id + '-3'))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), run_id))
+            connection.commit()
+        self.assertEqual(self.client.post(url).status_code, 409)
+        for kwargs in ({"fact_source": True}, {"memo_source": True},
+                       {"different_input": True}, {"mixed_error": True}):
+            other_id, _ = failed_run(**kwargs)
+            self.assertEqual(self.client.post(
+                f"/api/runs/{other_id}/replay-failed-authoring-node"
+            ).status_code, 409)
+
+    def test_v32_typed_source_failure_replays_only_after_migration_once(self) -> None:
+        error = {"type": "IntegrityError", "message": (
+            "CHECK constraint failed: source_type IN ('local_rag', 'online_paper')"
+        )}
+        original_input = json.dumps({"partial_searches": ["retained"], "claims": ["retained"]})
+        with self.app.state.databases.state.connect() as connection:
+            created = RunRepository(connection).create(
+                workflow_name="manuscript_generator", workflow_version="32",
+                entry_node="validate_evidence_support", inputs={"upstream": "preserved"},
+                project_id=None,
+            )
+            connection.execute("UPDATE node_runs SET status='completed',output_json=? "
+                               "WHERE run_id=?", ('{"evidence":"retained"}', created.run_id))
+            connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,error_json) "
+                "VALUES('typed-source-failure',?,'bounded_research_retry',1,'failed',?,?)",
+                (created.run_id, original_input, json.dumps(error)),
+            )
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            migration = connection.execute("SELECT * FROM schema_migrations WHERE version=?",
+                ("0054_typed_manuscript_research_sources",)).fetchone()
+            connection.execute("DELETE FROM schema_migrations WHERE version=?", (migration[0],))
+            connection.commit()
+        url = f"/api/runs/{created.run_id}/replay-failed-authoring-node"
+        denied = self.client.post(url)
+        self.assertEqual(denied.status_code, 409, denied.text)
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute("INSERT INTO schema_migrations VALUES(?,?,?)", tuple(migration))
+            connection.commit()
+        replay = self.client.post(url)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.json()["node_id"], "bounded_research_retry")
+        self.assertEqual(replay.json()["manual_replay_count"], 1)
+        with self.app.state.databases.state.connect() as connection:
+            node = connection.execute("SELECT * FROM node_runs WHERE id='typed-source-failure'")
+            node = node.fetchone()
+            self.assertEqual(node["input_json"], original_input)
+            self.assertEqual(node["status"], "queued")
+            upstream = connection.execute("SELECT status,output_json FROM node_runs "
+                                          "WHERE run_id=? AND node_id='validate_evidence_support'",
+                                          (created.run_id,)).fetchone()
+            self.assertEqual(upstream["status"], "completed")
+            self.assertEqual(upstream["output_json"], '{"evidence":"retained"}')
+            event = connection.execute("SELECT payload_json FROM event_log WHERE run_id=? "
+                "AND event_type='run.failed_authoring_node_replayed'", (created.run_id,)).fetchone()
+            self.assertEqual(json.loads(event[0])["previous_node_error"], error)
+            connection.execute("UPDATE node_runs SET status='failed',error_json=? "
+                               "WHERE id='typed-source-failure'", (json.dumps(error),))
+            connection.execute("UPDATE runs SET status='failed',error_json=? WHERE id=?",
+                               (json.dumps(error), created.run_id))
+            connection.commit()
+        repeated = self.client.post(url)
+        self.assertEqual(repeated.status_code, 409, repeated.text)
+
+    def test_answered_wrapped_request_is_hidden_without_changing_saved_questions(self) -> None:
+        self._create_authoring_review_fixture()
+        old_url = '/api/reviews/review-authoring-review/feedback'
+        old = self.client.get(old_url).json()
+        first = old['questions'][0]
+        self.assertEqual(self.client.put(old_url, json={'revision':0,'submit':True,
+            'answers':[{'question_id':first['question_id'],'answer':'資料は手元にない。'}]}
+        ).status_code, 200)
+        reason = first['reason']
+        with self.app.state.databases.state.connect() as c:
+            row = c.execute("SELECT * FROM human_reviews WHERE id='review-authoring-review'"
+                            ).fetchone()
+            context = {'proposed_html':old['preview_html'], 'human_review_items':[
+                {'review_item_id':'different','section_id':'other','category':'interpretation',
+                 'reason':'別の表現をどのように扱うか'}],
+                'human_revision_decision':{'review_items':[
+                    {'scope':'S005-P02-S03','code':'authoring.user_information_required',
+                     'message':reason},
+                    {'code':'unresolved.important','message':'原著の該当箇所を確認する。'}]}}
+            c.execute("UPDATE human_reviews SET status='edited' WHERE id=?", (row['id'],))
+            c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,output_json) "
+                "VALUES('wrapper-next-node',?,'human_approval',2,'waiting_human',?)",
+                (row['run_id'],json.dumps(context)))
+            c.execute("INSERT INTO human_reviews(id,run_id,node_run_id,object_type,object_id,"
+                "question,options_json,status,created_at) VALUES('wrapper-next-review',?,"
+                "'wrapper-next-node','authoring_submission',?,'確認してください','[]','open',?)",
+                (row['run_id'],row['object_id'],utc_now()))
+            c.commit()
+        url = '/api/reviews/wrapper-next-review/feedback'
+        fresh = self.client.get(url).json()
+        self.assertEqual(len(fresh['questions']),2)
+        self.assertNotIn(reason,[q['reason'] for q in fresh['questions']])
+        self.assertTrue(next(q for q in fresh['questions'] if q['category']=='unresolved.important'
+                            )['question'].endswith('ありますか？'))
+        legacy = {'question_id':'wrapped-copy','presentation_version':2,'category':
+            'authoring.user_information_required','key':'legacy-copy','reason':reason,
+            'question':first['question'],'target':'原稿全体','requested_target_id':'原稿全体'}
+        stored = json.dumps([*fresh['questions'],legacy],ensure_ascii=False)
+        with self.app.state.databases.state.connect() as c:
+            c.execute('UPDATE review_feedback SET questions_json=? WHERE review_id=?',
+                      (stored,'wrapper-next-review'))
+            c.commit()
+        projected = self.client.get(url).json()
+        self.assertEqual(len(projected['questions']),2)
+        self.assertEqual(projected['revision'],0)
+        with self.app.state.databases.state.connect() as c:
+            self.assertEqual(c.execute('SELECT questions_json FROM review_feedback '
+                'WHERE review_id=?',
+                ('wrapper-next-review',)).fetchone()[0],stored)
+        late = self.client.put(url, json={'revision':0,'answers':[
+            {'question_id':'wrapped-copy','answer':'現在の下書き','llm_overreach':False}]})
+        self.assertEqual(late.status_code,200,late.text)
+        self.assertEqual(len(self.client.get(url).json()['questions']),3)
+        with self.app.state.databases.state.connect() as c:
+            c.execute("UPDATE human_reviews SET status='edited' WHERE id='wrapper-next-review'")
+            c.execute("UPDATE review_feedback SET answers_json='[]' WHERE review_id=?",
+                      ('wrapper-next-review',))
+            c.commit()
+        self.assertEqual(len(self.client.get(url).json()['questions']),3)
+        history = self.client.get(old_url).json()
+        self.assertEqual(history['answers'][0]['answer'],'資料は手元にない。')
+        self.assertIn(first['question_id'],[q['question_id'] for q in history['questions']])
+
+    def test_review_question_feedback_survives_reload_and_reaches_revision(self) -> None:
+        from fukamiru.review_feedback import apply_feedback, feedback_context
+
+        self._create_authoring_review_fixture()
+        url = "/api/reviews/review-authoring-review/feedback"
+        packet = self.client.get(url).json()
+        self.assertIn("本文。", packet["preview_html"])
+        question = packet["questions"][0]
+        self.assertEqual(question["question_id"], "HRI-S005-P02-S03")
+        self.assertTrue(question["question"].endswith("ありますか？"))
+        response = self.client.put(url, json={
+            "revision": packet["revision"], "submit": True,
+            "answers": [{"question_id": question["question_id"], "llm_overreach": True}],
+            "overall_comment": "著者の解釈として維持する",
+        })
+        self.assertEqual(response.status_code, 200, response.text)
+        reloaded = self.client.get(url).json()
+        self.assertEqual(reloaded["answers"][0]["answer"], "")
+        self.assertTrue(reloaded["answers"][0]["llm_overreach"])
+        self.assertEqual(reloaded["overall_comment"], "著者の解釈として維持する")
+        self.assertEqual(reloaded["revision"], reloaded["submitted_revision"])
+        stale = self.client.put(url, json={"revision": 0, "answers": []})
+        self.assertEqual(stale.status_code, 409)
+        invalid = self.client.put(url, json={"revision": 1, "answers": [
+            {"question_id": "another-review-question", "llm_overreach": True},
+        ]})
+        self.assertEqual(invalid.status_code, 409)
+        with self.app.state.databases.state.connect() as connection:
+            review = connection.execute(
+                "SELECT run_id,node_run_id FROM human_reviews WHERE id='review-authoring-review'"
+            ).fetchone()
+            context = json.loads(connection.execute(
+                "SELECT output_json FROM node_runs WHERE id=?", (review["node_run_id"],),
+            ).fetchone()[0])
+            context["authoring_review_id"] = "review-authoring-review"
+            context["human_review"] = "元の著者コメント"
+            connection.execute("UPDATE node_runs SET output_json=? WHERE id=?",
+                               (json.dumps(context), review["node_run_id"]))
+            connection.commit()
+            feedback = feedback_context(connection, review["run_id"])
+        changed = apply_feedback(context, feedback)
+        self.assertEqual(changed["human_review_items"][0]["status"], "dismissed")
+        self.assertEqual(changed["argument_nodes"], context["argument_nodes"])
+        self.assertIn("元の著者コメント", changed["human_review"])
+        self.assertIn('"llm_overreach": true', changed["human_review"])
+        self.assertIn("外部資料の根拠ではありません", changed["human_review"])
+        self.assertEqual(apply_feedback(changed, feedback)["human_review"], changed["human_review"])
+        self.assertEqual(changed["human_review_items"][0]["source_ids"], ["SRC-014"])
+        # A new audit identifier does not resurrect precisely the same demand.
+        changed["human_review_items"][0]["review_item_id"] = "new-audit-id"
+        self.assertEqual(apply_feedback(changed, feedback)["human_review_items"][0]["status"],
+                         "dismissed")
+        worker = self.app.state.worker
+        capture = {}
+        worker.authoring_adapter = SimpleNamespace(
+            generate=lambda stage, payload, **kwargs: capture.update(payload) or {}
+        )
+        worker._authoring_invoke(
+            SimpleNamespace(run_id=review["run_id"], workflow_version="32",
+                            node_id="generate_hypotheses"),
+            stage="generate_hypotheses", context={}, payload={},
+            operation_name="feedback-test", checkpoint=False,
+        )
+        self.assertTrue(capture["human_question_feedback"]["answers"][0]["llm_overreach"])
+        revised = self.client.post("/api/reviews/review-authoring-review/resolve",
+                                   json={"decision": "revise"})
+        self.assertEqual(revised.status_code, 200, revised.text)
+        self.assertEqual(revised.json()["next_node"], "start_paragraph_formation")
+        with self.app.state.databases.state.connect() as connection:
+            queued = connection.execute(
+                "SELECT input_json FROM node_runs WHERE run_id=? AND status='queued'",
+                (review["run_id"],),
+            ).fetchone()
+            data = json.loads(queued[0])
+            self.assertNotIn("authoring_review_id", data)
+            self.assertTrue(data["authoring_submission_revalidation"])
+            self.assertTrue(data["human_question_feedback"]["answers"][0]["llm_overreach"])
+            self.assertIn('"llm_overreach": true', data["human_review"])
+        history = self.client.get(url)
+        self.assertEqual(history.status_code, 200, history.text)
+        self.assertEqual(history.json()["status"], "edited")
+        self.assertEqual(history.json()["preview_html"], packet["preview_html"])
+        self.assertEqual(self.client.put(url, json={"revision": 1}).status_code, 409)
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute(
+                "INSERT INTO human_reviews(id,run_id,node_run_id,object_type,object_id,"
+                "question,options_json,status,created_at) VALUES "
+                "('next-review',?,?,'authoring_submission','review-authoring-artifact',"
+                "'再生成した原稿を確認できますか？','[]','open',?)",
+                (review["run_id"], review["node_run_id"], utc_now()),
+            )
+            connection.commit()
+        next_packet = self.client.get("/api/reviews/next-review/feedback")
+        self.assertEqual(next_packet.status_code, 200, next_packet.text)
+        self.assertEqual(next_packet.json()["questions"], [])
+        sent_history = self.client.get("/api/review-feedback-history").json()
+        self.assertIn("review-authoring-review", [item["id"] for item in sent_history])
+
+    def test_review_includes_additional_information_requests_as_questions(self) -> None:
+        self._create_authoring_review_fixture()
+        with self.app.state.databases.state.connect() as connection:
+            row = connection.execute(
+                "SELECT node_run_id FROM human_reviews WHERE id='review-authoring-review'"
+            ).fetchone()
+            context = json.loads(connection.execute(
+                "SELECT output_json FROM node_runs WHERE id=?", (row[0],),
+            ).fetchone()[0])
+            context["required_user_information"] = [{
+                "question": "想定する読者層について、補足できる情報はありますか？",
+                "affected_scope": "読者層",
+            }]
+            connection.execute("UPDATE node_runs SET output_json=? WHERE id=?",
+                               (json.dumps(context), row[0]))
+            connection.commit()
+        packet = self.client.get("/api/reviews/review-authoring-review/feedback").json()
+        self.assertEqual(len(packet["questions"]), 2)
+        self.assertEqual(packet["questions"][1]["question"],
+                         "想定する読者層について、補足できる情報はありますか？")
+
+    def test_review_maps_real_authoring_targets_and_coherence_requests(self) -> None:
+        from fukamiru.authoring.render import render_canonical_html
+
+        _, artifact_path = self._create_authoring_review_fixture()
+        canonical = render_canonical_html(plan_id="review-plan", sections=[{
+            "section_id": "section-body-001", "title": "仮想展示の配置", "article_role": "body",
+            "paragraphs": [{"text": "対象の段落。著者の解釈を示す。"}],
+        }])
+        artifact_path.write_text(canonical, encoding="utf-8")
+        with self.app.state.databases.state.connect() as connection:
+            row = connection.execute("SELECT node_run_id FROM human_reviews WHERE id=?",
+                                     ("review-authoring-review",)).fetchone()
+            context = json.loads(connection.execute("SELECT output_json FROM node_runs WHERE id=?",
+                                                    (row[0],)).fetchone()[0])
+            context["human_review_items"] = [{
+                "review_item_id": "readable-question", "section_id": "section-body-001",
+                "sentence_id": "section-body-001-P01-S02", "status": "open",
+                "category": "required_citation", "source_ids": ["SRC-014"],
+                "reason": "required source has no citation-to-claim evidence mapping。"
+                          "著者記録の主張: 仮想展示の配置は解釈に影響する。",
+            }]
+            context["coherence_unresolved_routes"] = [{
+                "id": "coherence-1", "resolution_route": "additional_research",
+                "explanation": "読者の範囲を確認する資料が必要という指摘。",
+                "block_ids": ["P-review-plan-section-body-001-001"],
+            }]
+            context["propositions"] = [{"id": "memo-1", "text": "架空の展示計画を記したメモ。"}]
+            context["claims"] = [{"id": "claim-1", "text": "仮想展示の配置に関する比較の主張。"}]
+            context["required_user_information"] = [
+                {"code": "source", "affected_scope": "SRC-014",
+                 "reason": context["human_review_items"][0]["reason"]},
+                {"code": "reference_unresolved", "affected_scope": "memo-1",
+                 "reason": "原典の書誌情報を確認したい。"},
+                {"code": "claim_requires_research", "affected_scope": "claim-1",
+                 "reason": "比較の基準を確認する資料が必要。"},
+            ]
+            connection.execute("UPDATE node_runs SET output_json=? WHERE id=?",
+                               (json.dumps(context), row[0]))
+            connection.commit()
+        packet = self.client.get("/api/reviews/review-authoring-review/feedback").json()
+        self.assertEqual(len(packet["questions"]), 4)
+        question, coherence, memo, claim = packet["questions"]
+        self.assertEqual(question["question_id"], "readable-question")
+        self.assertEqual(question["excerpt"], "対象の段落。著者の解釈を示す。")
+        self.assertEqual(question["excerpt_scope"], "paragraph")
+        self.assertEqual(question["target_id"], "P-review-plan-section-body-001-001")
+        self.assertEqual(question["source_ids"], ["SRC-014"])
+        self.assertNotIn("required source", question["question"])
+        self.assertIn("required source", question["reason"])
+        self.assertEqual(
+            question["context_note"], "確認したい主張：仮想展示の配置は解釈に影響する。",
+        )
+        self.assertEqual(coherence["question_id"], "coherence:coherence-1")
+        self.assertEqual(coherence["target"], "仮想展示の配置")
+        self.assertEqual(coherence["excerpt"], question["excerpt"])
+        self.assertTrue(coherence["question"].endswith("ありますか？"))
+        self.assertEqual(memo["target"], "元メモの整理内容")
+        self.assertEqual(memo["excerpt_scope"], "planning")
+        self.assertEqual(memo["excerpt"], "架空の展示計画を記したメモ。")
+        self.assertEqual(claim["excerpt"], "仮想展示の配置に関する比較の主張。")
+        self.assertTrue(claim["question"].endswith("ありますか？"))
+        again = self.client.get("/api/reviews/review-authoring-review/feedback").json()
+        self.assertEqual(again["questions"], packet["questions"])
+        from fukamiru.review_feedback import ReviewFeedbackService
+
+        with self.app.state.databases.state.connect() as connection:
+            review = dict(connection.execute("SELECT * FROM human_reviews WHERE id=?",
+                                             ("review-authoring-review",)).fetchone())
+            current, _ = ReviewFeedbackService(connection)._packet(
+                review, {**context, "footnoted_coherence_unresolved_routes": []},
+            )
+            self.assertEqual(len(current), 3)
+            self.assertNotIn("coherence:coherence-1", [item["question_id"] for item in current])
+            legacy = packet["questions"]
+            legacy[0].pop("presentation_version")
+            legacy[0].pop("category")
+            legacy[0]["question"] = (
+                "必須引用の対応を確認してください: required source has no mapping？"
+            )
+            connection.execute("UPDATE review_feedback SET questions_json=?,answers_json=?,"
+                               "revision=3 WHERE review_id=?",
+                               (json.dumps(legacy), json.dumps([{
+                                   "question_id": "readable-question", "answer": "著者の回答",
+                                   "llm_overreach": False,
+                               }]), "review-authoring-review"))
+            connection.commit()
+        restored = self.client.get("/api/reviews/review-authoring-review/feedback").json()
+        self.assertEqual(restored["revision"], 3)
+        self.assertEqual(restored["answers"][0]["answer"], "著者の回答")
+        self.assertEqual(restored["questions"][0]["question_id"], "readable-question")
+        self.assertEqual(restored["questions"][0]["excerpt"], question["excerpt"])
+        self.assertNotIn("required source", restored["questions"][0]["question"])
+        self.assertIn("required source", restored["questions"][0]["recorded_question"])
+        with self.app.state.databases.state.connect() as connection:
+            stored = json.loads(connection.execute("SELECT questions_json FROM review_feedback "
+                "WHERE review_id=?", ("review-authoring-review",)).fetchone()[0])
+            self.assertEqual(stored, legacy)
+        sent = self.client.put("/api/reviews/review-authoring-review/feedback", json={
+            "revision": 3, "submit": True, "answers": [{
+                "question_id": "readable-question", "llm_overreach": True,
+            }],
+        })
+        self.assertEqual(sent.status_code, 200, sent.text)
+        with self.app.state.databases.state.connect() as connection:
+            current, _ = ReviewFeedbackService(connection)._packet(review, context)
+            self.assertEqual(len(current), 3)
+            self.assertNotIn("readable-question", [item["question_id"] for item in current])
+
+    def test_review_drafts_do_not_change_submitted_feedback_or_approval(self) -> None:
+        self._create_authoring_review_fixture()
+        url = "/api/reviews/review-authoring-review/feedback"
+        packet = self.client.get(url).json()
+        question_id = packet["questions"][0]["question_id"]
+        for revision, text, submit in ((0, "送信する回答", True), (1, "未送信の変更", False)):
+            saved = self.client.put(url, json={
+                "revision": revision, "answers": [{"question_id": question_id, "answer": text}],
+                "submit": submit,
+            })
+            self.assertEqual(saved.status_code, 200, saved.text)
+        from fukamiru.review_feedback import feedback_context
+
+        with self.app.state.databases.state.connect() as connection:
+            feedback = feedback_context(connection, packet["run_id"])
+        self.assertEqual(feedback["answers"][0]["answer"], "送信する回答")
+        approved = self.client.post("/api/reviews/review-authoring-review/resolve",
+                                    json={"decision": "approve"})
+        self.assertEqual(approved.status_code, 200, approved.text)
+        self.assertEqual(approved.json()["status"], "completed")
 
     def test_authoring_review_approval_confirms_proposal_and_projects_output(self) -> None:
         target_document_id, artifact_path = self._create_authoring_review_fixture()

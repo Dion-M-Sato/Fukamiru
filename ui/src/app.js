@@ -1,3 +1,4 @@
+import { ReviewDrafts, reviewPreviewDocument } from "./review-workspace.js?v=20261109-1";
 import { api } from "./api.js";
 import { corpusDuration, corpusPreflightProgress } from "./corpus-progress.js";
 import {
@@ -103,6 +104,10 @@ function escapeText(value) {
   const span = document.createElement("span");
   span.textContent = String(value ?? "");
   return span.innerHTML;
+}
+
+function reviewAttribute(value) {
+  return escapeText(value).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function loadPaneLayout() {
@@ -1058,317 +1063,248 @@ function openHumanReviewScreen(review, report) {
   });
 }
 
-async function renderReviewEditor() {
-  byId("tab-title").textContent = "レビュー待ち一覧";
-  byId("editor-content").innerHTML = '<article class="document-view"><h1>レビュー待ち一覧</h1><p class="empty-state">Loading…</p></article>';
+const reviewDrafts = new ReviewDrafts();
+let selectedReviewId = null;
+let reviewSelectionVersion = 0;
+const reviewSaveTimers = new Map();
+const reviewDraftKey = (id) => `fukamiru:review-draft:${id}`;
+
+function persistReviewDraft(id) {
+  const entry = reviewDrafts.entries.get(id);
   try {
-    const openReviews = await api("/api/reviews?status=open");
-    const authoringLedgers = new Map(await Promise.all(
-      openReviews.filter((review) => review.object_type === "authoring_submission")
-        .map(async (review) => {
-          try {
-            return [review.id, await api(`/api/reviews/${encodeURIComponent(review.id)}/argument-ledger`)];
-          } catch {
-            return [review.id, null];
-          }
-        }),
-    ));
-    const authoringEvidenceReviews = new Map(await Promise.all(
-      openReviews.filter((review) => review.object_type === "authoring_submission")
-        .map(async (review) => {
-          try {
-            return [review.id, await api(`/api/reviews/${encodeURIComponent(review.id)}/evidence-review`)];
-          } catch {
-            return [review.id, null];
-          }
-        }),
-    ));
-    state.reviews = openReviews;
-    if (state.activity === "review") renderSidebar();
-    const argumentLedgerMarkup = (ledger) => {
-      if (!ledger) return '<p class="muted">判断台帳を読み込めませんでした。提出マニフェストを確認してください。</p>';
-      return `<details class="argument-ledger"><summary>主張と根拠の判断台帳（${ledger.claims.length}件）</summary>
-        <p class="muted">資料の支持関係はAIの提案です。最終判断は人間が行います。</p>
-        ${ledger.claims.map((entry) => `<details class="argument-ledger-claim">
-          <summary><code>${escapeText(entry.claim_id)}</code> ${escapeText(entry.claim || "")}</summary>
-          <p><strong>AIの採用判断:</strong> ${escapeText(entry.ai_decision?.disposition || "not_recorded")} · ${escapeText(entry.ai_decision?.reason || "理由未記録")}</p>
-          <p><strong>対抗解釈:</strong> ${escapeText(entry.ai_decision?.counterinterpretation || entry.counterinterpretations.map((item) => item.text).join(" / ") || "未記録")}</p>
-          <p><strong>推論:</strong> ${escapeText(entry.warrants.map((item) => item.text).join(" / ") || "未記録")}</p>
-          ${entry.source_passages.map((source) => `<div class="argument-ledger-source">
-            <strong>${escapeText(source.title || source.source_id)}</strong>
-            ${Array.isArray(source.authors) && source.authors.length ? `<span>${escapeText(source.authors.map((author) => typeof author === "string" ? author : author?.name || "").filter(Boolean).join("、"))}</span>` : ""}
-            <span>${escapeText(source.locator || "箇所未記録")}</span>
-            <blockquote>${escapeText(source.excerpt || "引用箇所未記録")}</blockquote>
-            ${/^https?:\/\//i.test(source.source_url || "") ? `<a href="${escapeText(source.source_url)}" target="_blank" rel="noopener noreferrer">出典を開く</a>` : ""}
-            <span>書誌: ${escapeText(source.bibliographic_verification_status || "未記録")} · 資料: ${escapeText(source.source_verification_status || "未記録")}</span>
-          </div>`).join("") || '<p class="muted">外部資料の紐付けなし</p>'}
-        </details>`).join("")}
-      </details>`;
-    };
-    const evidenceReviewMarkup = (report, review) => {
-      if (!report) return '<p class="muted">人間確認リストを読み込めませんでした。レビュー報告を確認してください。</p>';
-      const items = Array.isArray(report.review_items) ? report.review_items : [];
-      return `<div class="human-review-entry">
-        <span>人間確認リスト <strong>${items.length}件</strong></span>
-        <button class="secondary-action human-review-open" type="button"
-          data-review-id="${escapeText(review.id)}">確認リストを開く</button>
+    if (!entry.dirty) sessionStorage.removeItem(reviewDraftKey(id));
+    else sessionStorage.setItem(reviewDraftKey(id), JSON.stringify({
+      revision: entry.packet.revision, answers: entry.packet.answers,
+      overall_comment: entry.packet.overall_comment,
+    }));
+  } catch { /* Server autosave remains available if browser storage is full. */ }
+}
+
+function reviewSaveStatus(message, error = false) {
+  const status = byId("review-save-status");
+  if (status) { status.textContent = message; status.classList.toggle("error-text", error); }
+}
+
+async function saveReviewDraft(id, submit = false) {
+  clearTimeout(reviewSaveTimers.get(id));
+  if (id === selectedReviewId) reviewSaveStatus(submit ? "回答を送信中…" : "下書きを保存中…");
+  try {
+    const packet = await reviewDrafts.save(id, (body) => api(`/api/reviews/${encodeURIComponent(id)}/feedback`, {
+      method: "PUT", body: JSON.stringify(body),
+    }), submit);
+    persistReviewDraft(id);
+    if (id === selectedReviewId) reviewSaveStatus(submit
+      ? "回答を送信しました。次の生成・修正・再レビューに反映されます。"
+      : packet.submitted_revision === packet.revision ? "送信済み" : "下書き保存済み");
+    return packet;
+  } catch (error) {
+    if (id === selectedReviewId) reviewSaveStatus(`保存できませんでした: ${error.message}`, true);
+    throw error;
+  }
+}
+
+function editReviewDraft(id, update) {
+  reviewDrafts.edit(id, update);
+  persistReviewDraft(id);
+  reviewSaveStatus("未送信の変更があります · 自動保存中…");
+  clearTimeout(reviewSaveTimers.get(id));
+  reviewSaveTimers.set(id, setTimeout(() => saveReviewDraft(id).catch(() => {}), 600));
+}
+
+async function selectReview(review) {
+  const selection = ++reviewSelectionVersion;
+  if (selectedReviewId && selectedReviewId !== review.id
+      && reviewDrafts.entries.get(selectedReviewId)?.dirty) {
+    try { await saveReviewDraft(selectedReviewId); } catch { /* Retain the local recovery copy. */ }
+    if (selection !== reviewSelectionVersion) return;
+  }
+  selectedReviewId = review.id;
+  document.querySelector(".workbench").classList.add("review-active", "mobile-review-open");
+  closeDraftPreview();
+  setPaneVisibility("right", true);
+  byId("review-inspector").hidden = false;
+  byId("inspector-default").hidden = true;
+  byId("inspector-title").textContent = "レビュー";
+  document.querySelectorAll("[data-review-select]").forEach((button) => {
+    const selected = button.dataset.reviewSelect === review.id;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  byId("review-inspector").innerHTML = '<p class="empty-state">レビューを読み込み中…</p>';
+  byId("review-selection").innerHTML = '<p class="empty-state">選択したレビューを読み込み中…</p>';
+  try {
+    const cached = reviewDrafts.entries.get(review.id);
+    const entry = cached || reviewDrafts.load(await api(`/api/reviews/${encodeURIComponent(review.id)}/feedback`));
+    if (selection !== reviewSelectionVersion) return;
+    const packet = entry.packet;
+    if (!cached && packet.status === "open") {
+      try {
+        const saved = JSON.parse(sessionStorage.getItem(reviewDraftKey(review.id)) || "null");
+        if (saved && saved.revision === packet.revision) {
+          reviewDrafts.edit(review.id, (draft) => {
+            draft.answers = saved.answers; draft.overall_comment = saved.overall_comment;
+          });
+          reviewSaveTimers.set(review.id, setTimeout(() => saveReviewDraft(review.id).catch(() => {}), 600));
+        } else if (saved) entry.recovery = saved;
+      } catch { /* An unreadable recovery copy must not replace server data. */ }
+    }
+    const editable = packet.status === "open";
+    const answered = new Map(packet.answers.map((answer) => [answer.question_id, answer]));
+    const title = review.source_title || review.question || "原稿レビュー";
+    byId("review-selection").innerHTML = `
+      <h2>${escapeText(title)}</h2>
+      <p class="muted">Run ${escapeText(review.run_id)} · 質問 ${packet.questions.length}件</p>
+      <label class="review-field">全体へのコメント
+        <textarea id="review-overall-comment" placeholder="原稿全体の方針や伝えておきたいこと" ${editable ? "" : "readonly"}>${escapeText(packet.overall_comment)}</textarea>
+      </label>
+      <p id="review-save-status" role="status">${entry.dirty || (packet.submitted_revision != null && packet.submitted_revision !== packet.revision) ? "未送信の下書きを表示しています。送信すると次の処理に反映されます。" : packet.submitted_at ? "送信済みの回答を表示しています" : "回答は自動保存されます。送信すると次の処理に反映されます。"}</p>
+      <div class="review-actions">
+        ${editable ? '<button class="secondary-action" id="review-submit" type="button">回答を送信</button>' : ""}
+        ${editable && review.object_type !== "manuscript_rewrite_proposal" ? `
+          ${!["authoring_graph_invalid_reference", "authoring_draft_source_unresolved"].includes(review.object_type) ? `<button class="primary-action review-decision" data-review="${escapeText(review.id)}" data-decision="approve">承認</button>` : ""}
+          ${["authoring_submission", "run_artifact", "authoring_graph_invalid_reference"].includes(review.object_type) ? `<button class="secondary-action review-decision" data-review="${escapeText(review.id)}" data-decision="revise">回答を反映して${review.object_type === "authoring_submission" ? "再生成" : "修正"}</button>` : ""}
+          ${review.object_type === "authoring_draft_source_unresolved" ? `<button class="secondary-action review-decision" data-review="${escapeText(review.id)}" data-decision="defer">出典未確認として保留し、生成を続ける</button>` : ""}
+          <button class="danger-action review-decision" data-review="${escapeText(review.id)}" data-decision="reject">却下</button>` : ""}
+        ${review.object_type === "manuscript_rewrite_proposal" ? `<button class="primary-action manuscript-proposal-open" data-proposal-id="${escapeText(review.object_id)}" data-run-id="${escapeText(review.run_id)}">改稿案の承認操作へ</button>${editable ? '<button class="secondary-action" id="review-proposal-revise" type="button">回答を反映して再改稿</button>' : ""}` : ""}
       </div>`;
-    };
-    const reviewCard = (review) => {
-      if (review.object_type === "manuscript_rewrite_proposal") {
-        return `
-          <section class="review-card manuscript-rewrite-review-card">
-            <h2>${escapeText(review.source_title || review.question)}</h2>
-            <p class="muted">Project ${escapeText(review.project_name || "-")} · Run ${escapeText(review.run_id)}</p>
-            ${review.proposal_status === "needs_human_review" ? `<p class="error-text">自動完了条件を満たしていません。人間レビュー必須 ${Number(review.quality_blocking_count || 0)}件</p>` : ""}
-            <p>${Number(review.applied_edit_count || 0)} edits · 最終整合性警告 ${Number(review.coherence_warning_count || 0)}件 · ${review.validation_valid ? "canonical validation passed" : "validation required"}</p>
-            <p class="muted">未適用編集 ${Number(review.skipped_edit_count || 0)}件 · 未解決事項 ${Number(review.unresolved_question_count || 0)}件</p>
-            <div class="review-actions">
-              <button class="secondary-action manuscript-draft-open" type="button"
-                data-proposal-id="${escapeText(review.object_id)}"
-                data-draft-title="${escapeText(review.source_title || review.question)}">HTMLでドラフト確認</button>
-              <button class="primary-action manuscript-proposal-open" type="button"
-                data-proposal-id="${escapeText(review.object_id)}"
-                data-run-id="${escapeText(review.run_id)}">改稿案をレビュー</button>
-              ${review.status === "open" ? `<button class="danger-action manuscript-discard" type="button"
-                data-proposal-id="${escapeText(review.object_id)}">破棄</button>` : ""}
-            </div>
+    byId("review-inspector").innerHTML = `
+      <button id="review-pane-back" class="secondary-action review-pane-back" type="button">一覧と全体コメントへ</button>
+      <header class="review-pane-heading"><strong>${escapeText(title)}</strong><span class="muted">${packet.questions.length}問 · ${editable ? "回答待ち" : "回答記録"}</span></header>
+      <div class="review-pane-tabs" role="tablist" aria-label="レビュー表示">
+        <button id="review-questions-tab" role="tab" aria-controls="review-questions" aria-selected="true" tabindex="0">質問と回答</button>
+        <button id="review-html-tab" role="tab" aria-controls="review-html" aria-selected="false" tabindex="-1">対象のHTML</button>
+      </div>
+      <section id="review-questions" role="tabpanel" aria-labelledby="review-questions-tab">
+      ${entry.recovery ? `<details class="review-recovery"><summary>このタブに未保存の回答があります</summary><p>別の画面で更新されているため、自動では上書きしません。</p>${entry.recovery.answers.map((answer) => `<p><strong>${escapeText(packet.questions.find((question) => question.question_id === answer.question_id)?.question || "以前の質問")}</strong><br>${escapeText(answer.answer)}${answer.llm_overreach ? " · LLMの過剰要求である" : ""}</p>`).join("")}<p>${escapeText(entry.recovery.overall_comment)}</p><button id="review-recover-local" class="secondary-action" type="button">未保存の回答を復元して編集</button></details>` : ""}
+        <p class="muted">質問ごとに回答できます。過剰要求の選択だけでも送信できます。</p>
+        ${packet.questions.map((question, index) => {
+          const answer = answered.get(question.question_id) || {};
+          const previous = question.previous_answer;
+          return `<section class="review-question" data-question-id="${reviewAttribute(question.question_id)}">
+            <span class="review-question-number">質問 ${index + 1} <span>${escapeText(question.target)}</span></span>
+            <h3 id="review-question-${index}">${escapeText(question.question)}</h3>
+            ${question.context_note ? `<p class="review-question-context">${escapeText(question.context_note)}</p>` : ""}
+            ${question.excerpt_scope === "paragraph" ? '<p class="review-excerpt-label">対象の段落</p>' : question.excerpt_scope === "section" ? '<p class="review-excerpt-label">対象の節</p>' : question.excerpt_scope === "planning" ? '<p class="review-excerpt-label">検討対象の内容</p>' : ""}
+            ${question.excerpt ? question.excerpt.length > 360
+              ? `<details class="review-excerpt-detail"><summary>本文の抜粋を読む</summary><blockquote class="review-question-excerpt">${escapeText(question.excerpt)}</blockquote></details>`
+              : `<blockquote class="review-question-excerpt">${escapeText(question.excerpt)}</blockquote>` : ""}
+            ${previous ? `<p class="review-previous-answer">前回の判断: ${previous.llm_overreach ? "LLMの過剰要求である" : escapeText(previous.answer)}</p>` : ""}
+            <label class="review-field">回答<textarea data-question-answer="${reviewAttribute(question.question_id)}" aria-labelledby="review-question-${index}" placeholder="考えや補足情報を記入" ${editable ? "" : "readonly"}>${escapeText(answer.answer || "")}</textarea></label>
+            <label class="review-overreach"><input type="checkbox" data-question-overreach="${reviewAttribute(question.question_id)}" ${answer.llm_overreach ? "checked" : ""} ${editable ? "" : "disabled"}><span>LLMの過剰要求である</span></label>
+            <details class="review-question-details"><summary>質問の記録</summary><p>質問ID: ${escapeText(question.question_id)}</p>${question.recorded_question && question.recorded_question !== question.question ? `<p>保存された質問: ${escapeText(question.recorded_question)}</p>` : ""}<p>${escapeText(question.reason)}</p><p>関連する資料: ${escapeText(question.source_ids.join("、") || "なし")}</p></details>
           </section>`;
-      }
-      return `
-        <section class="review-card">
-        <h2>${escapeText(review.question)}</h2>
-        <p class="muted">Run ${escapeText(review.run_id)} · ${escapeText(review.status)}</p>
-        ${review.object_type === "authoring_graph_invalid_reference" ? `
-          <p>論証グラフの第${Number(review.graph_review?.batch_number || 1)}バッチに検証上の不整合があります。</p>
-          <ul class="review-audit-findings">
-            ${(review.graph_review?.problems || []).map((problem) => `<li>${escapeText(problem)}</li>`).join("")}
-          </ul>
-          <ol class="review-audit-findings">
-            ${(review.graph_review?.invalid_scopes || []).map((scope) => `<li>
-              <strong>主張 ${escapeText(scope.claim_id)}</strong>
-              <p>不正な根拠ID: ${escapeText((scope.invalid_evidence_basis_ids || []).join("、"))}</p>
-              <p>この主張の有効な根拠ノード: ${escapeText((scope.available_evidence_nodes || []).map((node) => `${node.id}: ${node.text}`).join("／") || "なし")}</p>
-            </li>`).join("")}
-          </ol>
-          ${(review.graph_review?.invalid_edges || []).map((edge) => `<p>存在しないノードへのエッジ ${escapeText(edge.id)}: ${escapeText(edge.source_id)} → ${escapeText(edge.target_id)}</p>`).join("")}
-          ${(review.graph_review?.invalid_node_claims || []).map((node) => `<p>存在しない主張へのノード ${escapeText(node.node_id)}: ${escapeText(node.claim_id)}</p>`).join("")}
-          <label class="review-field">対応関係と修正指示
-            <textarea data-review-feedback="${escapeText(review.id)}" placeholder="誤ったIDと対応する根拠ノード、または根拠がないことを具体的に記入"></textarea>
-          </label>` : ""}
-        ${review.object_type === "authoring_draft_source_unresolved" ? `
-          <p>次の証拠文は固定出典に結び付いていません。原典を確認し、固定出典IDを入力してください。証拠文の訂正もできます。既存の出典情報は履歴に残ります。</p>
-          ${(review.draft_source_review?.evidence_nodes || []).map((node) => `
-            <div class="review-audit-target">
-              <strong>${escapeText(node.id)}</strong>
-              <p>使用節: ${escapeText((node.section_ids || []).join("、"))}</p>
-              <p>${escapeText(node.text)}</p>
-              <p class="muted">元の出典ID: ${escapeText((node.provenance?.source_ids || []).join("、") || "なし")}</p>
-              <label class="review-field">確認した固定出典ID（複数ならカンマ区切り）
-                <input data-review-source="${escapeText(review.id)}" data-evidence-id="${escapeText(node.id)}" placeholder="source ID" />
-              </label>
-              <label class="review-field">訂正後の証拠文（変更する場合だけ）
-                <textarea data-review-evidence-text="${escapeText(review.id)}" data-evidence-id="${escapeText(node.id)}" placeholder="原文を維持する場合は空欄"></textarea>
-              </label>
-            </div>`).join("")}` : ""}
-        ${review.object_type === "authoring_plan" ? `
-          <div class="review-audit-target">
-            <strong>対象原稿: ${escapeText(review.source_title || review.object_id)}</strong>
-            <span>${review.project_name ? `Project ${escapeText(review.project_name)} · ` : ""}構造監査 ${review.audit_attempt ? `${Number(review.audit_attempt)}回目` : "回数不明"}</span>
-          </div>
-          ${Array.isArray(review.audit_findings) && review.audit_findings.length ? `
-            <details class="review-audit-details" open>
-              <summary>この監査の指摘（重要 ${review.audit_findings.filter((finding) => ["major", "critical"].includes(finding.severity)).length}件、その他 ${review.audit_findings.filter((finding) => !["major", "critical"].includes(finding.severity)).length}件）</summary>
-              <ol class="review-audit-findings">
-                ${review.audit_findings.map((finding) => `<li>
-                  <strong>${escapeText(finding.section_title || finding.object_id || "原稿全体")}</strong>
-                  <span class="review-audit-severity">${escapeText(finding.severity || "unknown")}</span>
-                  <p>${escapeText(finding.message || "指摘内容なし")}</p>
-                </li>`).join("")}
-              </ol>
-            </details>` : '<p class="muted">このレビューに対応する監査結果を表示できません。</p>'}
-        ` : ""}
-        ${review.object_type === "run_artifact" || review.object_type === "authoring_submission"
-          ? `<button class="artifact-link draft-open" type="button"
-              data-artifact-id="${escapeText(review.object_id)}"
-              data-draft-title="${escapeText(review.source_title || review.question || "Translation draft")}">HTMLでドラフト確認</button>`
-          : review.object_type === "ocr_revision"
-            ? `<button class="artifact-link ocr-open" data-ocr-revision="${escapeText(review.object_id)}">WorkbenchでOCR文書を開く</button>`
-            : ""}
-        ${review.object_type === "run_artifact" ? `
-        <label class="review-field">修正指示
-          <textarea data-review-feedback="${escapeText(review.id)}" placeholder="修正すべき点を具体的に記入">${escapeText(review.response?.feedback || "")}</textarea>
-        </label>
-        <label class="review-field">人間による訂正文（任意）
-          <textarea data-review-corrected="${escapeText(review.id)}" placeholder="入力した場合は immutable human revision と Translation Memory に保存"></textarea>
-        </label>` : ""}
-        ${review.object_type === "authoring_submission" ? `
-          ${evidenceReviewMarkup(authoringEvidenceReviews.get(review.id), review)}
-          ${argumentLedgerMarkup(authoringLedgers.get(review.id))}
-          <label class="review-field">差し戻す主張
-            <select data-review-claim="${escapeText(review.id)}">
-              <option value="">原稿全体</option>
-              ${(authoringLedgers.get(review.id)?.claims || []).map((entry) => `<option value="${escapeText(entry.claim_id)}">${escapeText(entry.claim_id)} · ${escapeText(entry.claim || "")}</option>`).join("")}
-            </select>
-          </label>
-          <label class="review-field">差し戻し理由
-            <textarea data-review-feedback="${escapeText(review.id)}" placeholder="資料との不整合や修正すべき推論を記入"></textarea>
-          </label>` : ""}
-        <div class="review-actions">
-          ${review.status === "open" && !["authoring_graph_invalid_reference", "authoring_draft_source_unresolved"].includes(review.object_type) ? `<button class="primary-action review-decision" data-review="${escapeText(review.id)}" data-decision="approve">承認</button>` : ""}
-          ${review.status === "open" && ["authoring_graph_invalid_reference", "authoring_draft_source_unresolved"].includes(review.object_type) ? `<button class="primary-action review-decision" data-review="${escapeText(review.id)}" data-decision="revise">修正して再検証</button>` : ""}
-          ${review.status === "open" && review.object_type === "authoring_draft_source_unresolved" ? `<button class="secondary-action review-decision" data-review="${escapeText(review.id)}" data-decision="defer">出典未確認として保留し、本文生成を続ける</button>` : ""}
-          ${review.object_type === "run_artifact"
-            ? `<button class="secondary-action review-decision" data-review="${escapeText(review.id)}" data-decision="revise">${review.status === "rejected" ? "却下済みRunを修正再開" : "同じRunで修正"}</button>`
-            : ""}
-          ${review.status === "open" ? `<button class="danger-action review-decision" data-review="${escapeText(review.id)}" data-decision="reject">却下</button>` : ""}
-        </div>
+        }).join("") || '<p class="empty-state">新しく回答が必要な質問はありません。本文を確認し、中央で承認や全体コメントを行えます。</p>'}
+      </section>
+      <section id="review-html" role="tabpanel" aria-labelledby="review-html-tab" hidden>
+        ${packet.preview_html ? '<button id="review-html-expand" class="secondary-action" type="button">本文を大きく表示</button><iframe id="review-html-frame" sandbox title="レビュー対象のHTML原稿"></iframe>' : '<p class="empty-state">このレビューにはHTML原稿がありません。質問の対象と理由を確認してください。</p>'}
       </section>`;
-    };
-    const rejectedReviewLink = (review) => {
-      const sourceId = review.source_asset_id || review.run_id;
-      const sourceTarget = review.source_asset_id
-        ? `/api/source-assets/${encodeURIComponent(review.source_asset_id)}/file`
-        : `/api/artifacts/${encodeURIComponent(review.object_id)}`;
-      return `
-        <section class="rejected-review-entry">
-          <a class="rejected-review-link" href="${sourceTarget}" target="_blank" rel="noopener">
-            <strong>${escapeText(review.source_title || "PDF")}</strong>
-            <span>PDF ID ${escapeText(sourceId)} · Run ID ${escapeText(review.run_id)}</span>
-          </a>
-          <details class="rejected-review-revision">
-            <summary>このRunの修正を再開</summary>
-            ${reviewCard(review)}
-          </details>
-        </section>`;
-    };
-    const discardedManuscriptEntry = (review) => `
-      <section class="rejected-review-entry discarded-manuscript-entry">
-        <div>
-          <strong>${escapeText(review.source_title || review.question)}</strong>
-          <span>破棄済み原稿 · Run ID ${escapeText(review.run_id)} · Proposal ID ${escapeText(review.object_id)}</span>
-        </div>
-        <button class="secondary-action manuscript-draft-open" type="button"
-          data-proposal-id="${escapeText(review.object_id)}"
-          data-draft-title="${escapeText(review.source_title || review.question)}">HTMLで確認</button>
-      </section>`;
-    const historyEntry = (review) => `
-      <section class="rejected-review-entry review-history-entry">
-        <strong>${escapeText(review.source_title || review.question || review.object_id)}</strong>
-        <span>${escapeText(review.object_type || "review")} · Run ${escapeText(review.run_id)}</span>
-      </section>`;
-    const historyMarkup = (status, reviews) => {
-      if (!reviews.length) return `<p class="empty-state">${status === "approved" ? "承認" : "却下"}済みの項目はありません。</p>`;
-      if (status === "approved") {
-        const outputs = approvedOutputReviews(reviews);
-        const outputIds = new Set(outputs.map((review) => review.id));
-        return outputs.map(approvedReviewMarkup).join("")
-          + reviews.filter((review) => !outputIds.has(review.id)).map(historyEntry).join("");
-      }
-      return reviews.map((review) => review.object_type === "run_artifact"
-        ? rejectedReviewLink(review)
-        : review.object_type === "manuscript_rewrite_proposal"
-          ? discardedManuscriptEntry(review)
-          : historyEntry(review)).join("");
-    };
-    byId("editor-content").innerHTML = `
-      <article class="document-view"><h1>レビュー待ち一覧</h1>
-      <h2>保留中</h2>
-      ${openReviews.length ? openReviews.map(reviewCard).join("") : '<p class="empty-state">保留中のレビューはありません。</p>'}
-      <details class="review-archive" data-review-history="approved">
-        <summary>承認履歴 <span>開いて読み込む</span></summary>
-        <div class="review-archive-body"></div>
-      </details>
-      <details class="review-archive" data-review-history="rejected">
-        <summary>却下履歴 <span>開いて読み込む</span></summary>
-        <div class="review-archive-body"></div>
-      </details>
-      <details class="review-archive" data-review-defects>
-        <summary>未解決のDefect <span>開いて読み込む</span></summary>
-        <div class="review-archive-body"></div>
-      </details>
-      </article>`;
-    const bindReviewActions = (root) => {
-    root.querySelectorAll(".review-decision").forEach((button) => {
-      button.addEventListener("click", resolveReview);
-    });
-    root.querySelectorAll(".review-output-recover").forEach((button) => {
-      button.addEventListener("click", recoverApprovedReviewOutput);
-    });
-    root.querySelectorAll(".ocr-open").forEach((button) => {
-      button.addEventListener("click", openOcrRevision);
-    });
-    root.querySelectorAll(".draft-open").forEach((button) => {
-      button.addEventListener("click", openDraftPreview);
-    });
-    root.querySelectorAll(".manuscript-proposal-open").forEach((button) => {
-      button.addEventListener("click", openManuscriptRewriteReview);
-    });
-    root.querySelectorAll(".manuscript-draft-open").forEach((button) => {
-      button.addEventListener("click", openManuscriptDraftPreview);
-    });
-    root.querySelectorAll(".manuscript-discard").forEach((button) => {
-      button.addEventListener("click", discardManuscriptRewrite);
-    });
-    root.querySelectorAll(".defect-card").forEach((button) => {
-      button.addEventListener("click", openDefect);
-    });
-    root.querySelectorAll(".human-review-open").forEach((button) => {
-      button.addEventListener("click", () => {
-        const review = openReviews.find((item) => item.id === button.dataset.reviewId);
-        const report = authoringEvidenceReviews.get(button.dataset.reviewId);
-        if (review && report) openHumanReviewScreen(review, report);
+    const frame = byId("review-html-frame");
+    byId("review-recover-local")?.addEventListener("click", () => {
+      editReviewDraft(review.id, (draft) => {
+        draft.answers = entry.recovery.answers; draft.overall_comment = entry.recovery.overall_comment;
       });
+      delete entry.recovery;
+      selectReview(review);
     });
-    };
-    bindReviewActions(byId("editor-content"));
-    document.querySelectorAll("[data-review-history]").forEach((details) => {
-      details.addEventListener("toggle", async () => {
-        if (!details.open || details.dataset.loaded === "true" || details.dataset.loading === "true") return;
-        details.dataset.loading = "true";
-        const body = details.querySelector(".review-archive-body");
-        body.innerHTML = '<p class="empty-state">履歴を読み込み中…</p>';
-        try {
-          const status = details.dataset.reviewHistory;
-          const reviews = await api(`/api/reviews?status=${status}`);
-          if (!details.isConnected) return;
-          state.reviews = [...state.reviews.filter((review) => review.status !== status), ...reviews];
-          body.innerHTML = historyMarkup(status, reviews);
-          details.querySelector("summary span").textContent = `${reviews.length}件`;
-          details.dataset.loaded = "true";
-          bindReviewActions(body);
-        } catch (error) {
-          if (details.isConnected) body.innerHTML = `<p class="error-text">履歴を読み込めませんでした: ${escapeText(error.message)}</p>`;
-        } finally {
-          delete details.dataset.loading;
+    byId("review-pane-back").addEventListener("click", () => document.querySelector(".workbench").classList.remove("mobile-review-open"));
+    if (frame) frame.srcdoc = reviewPreviewDocument(packet.preview_html);
+    for (const name of ["questions", "html"]) {
+      byId(`review-${name}-tab`).addEventListener("click", () => {
+        for (const pane of ["questions", "html"]) {
+          byId(`review-${pane}`).hidden = pane !== name;
+          byId(`review-${pane}-tab`).setAttribute("aria-selected", String(pane === name));
+          byId(`review-${pane}-tab`).tabIndex = pane === name ? 0 : -1;
         }
       });
+      byId(`review-${name}-tab`).addEventListener("keydown", (event) => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "questions" : event.key === "End" ? "html" : name === "html" ? "questions" : "html";
+        byId(`review-${next}-tab`).click();
+        byId(`review-${next}-tab`).focus();
+      });
+    }
+    byId("review-html-expand")?.addEventListener("click", () => {
+      byId("review-html-modal-frame").srcdoc = reviewPreviewDocument(packet.preview_html);
+      byId("review-html-modal").showModal();
     });
-    const defectDetails = document.querySelector("[data-review-defects]");
-    defectDetails.addEventListener("toggle", async () => {
-      if (!defectDetails.open || defectDetails.dataset.loaded === "true" || defectDetails.dataset.loading === "true") return;
-      defectDetails.dataset.loading = "true";
-      const body = defectDetails.querySelector(".review-archive-body");
-      body.innerHTML = '<p class="empty-state">Defectを読み込み中…</p>';
+    byId("review-overall-comment").addEventListener("input", (event) => {
+      editReviewDraft(review.id, (draft) => { draft.overall_comment = event.target.value; });
+    });
+    byId("review-inspector").querySelectorAll("[data-question-answer], [data-question-overreach]").forEach((input) => {
+      input.addEventListener(input.type === "checkbox" ? "change" : "input", () => {
+        const id = input.dataset.questionAnswer || input.dataset.questionOverreach;
+        editReviewDraft(review.id, (draft) => {
+          let answer = draft.answers.find((item) => item.question_id === id);
+          if (!answer) { answer = { question_id: id, answer: "", llm_overreach: false }; draft.answers.push(answer); }
+          if (input.type === "checkbox") answer.llm_overreach = input.checked;
+          else answer.answer = input.value;
+        });
+      });
+    });
+    byId("review-submit")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await saveReviewDraft(review.id, true); } catch { /* Status retains the error. */ }
+      finally { button.disabled = false; }
+    });
+    byId("review-selection").querySelectorAll(".review-decision").forEach((button) => button.addEventListener("click", resolveReview));
+    byId("review-selection").querySelector(".manuscript-proposal-open")?.addEventListener("click", openManuscriptRewriteReview);
+    byId("review-proposal-revise")?.addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      button.disabled = true;
       try {
-        const defects = await api("/api/defects");
-        if (!defectDetails.isConnected) return;
-        state.defects = defects;
-        const groups = groupOpenDefects(defects);
-        body.innerHTML = `<p class="muted">対象原稿・翻訳ごとにまとめています。対象を開くとRun別のDefectを確認できます。</p>
-          ${groups.length ? groups.map(defectGroupMarkup).join("") : '<p class="empty-state">未解決のDefectはありません。</p>'}`;
-        defectDetails.querySelector("summary span").textContent = `${defects.length}件`;
-        defectDetails.dataset.loaded = "true";
-        bindReviewActions(body);
-      } catch (error) {
-        if (defectDetails.isConnected) body.innerHTML = `<p class="error-text">Defectを読み込めませんでした: ${escapeText(error.message)}</p>`;
-      } finally {
-        delete defectDetails.dataset.loading;
-      }
+        await saveReviewDraft(review.id, true);
+        const result = await api(`/api/manuscript-rewrites/${encodeURIComponent(review.object_id)}/revise`, { method: "POST", body: JSON.stringify({}) });
+        connectToRun(result.run_id);
+        reviewSaveStatus("回答を反映する再改稿を開始しました。");
+      } catch (error) { reviewSaveStatus(error.message, true); button.disabled = false; }
     });
   } catch (error) {
-    addProblem(error.message);
+    if (selection !== reviewSelectionVersion) return;
+    byId("review-inspector").innerHTML = `<p class="error-text">${escapeText(error.message)}</p>`;
+    byId("review-selection").innerHTML = '<p class="error-text">レビューを読み込めませんでした。一覧から選び直してください。</p>';
   }
+}
+
+async function renderReviewEditor() {
+  byId("tab-title").textContent = "レビュー待ち一覧";
+  byId("editor-content").innerHTML = '<article class="document-view"><h1>レビュー待ち一覧</h1><p class="empty-state">読み込み中…</p></article>';
+  try {
+    const reviews = await api("/api/reviews?status=open");
+    state.reviews = reviews;
+    if (state.activity === "review") renderSidebar();
+    byId("editor-content").innerHTML = `
+      <article class="document-view review-workspace"><h1>レビュー待ち一覧 <span class="muted">${reviews.length}件</span></h1>
+        <p class="muted">対象を選び、右ペインの本文と質問を確認してください。</p>
+        <div class="review-queue-list" aria-label="承認待ちのレビュー">
+          ${reviews.map((review) => `<button type="button" class="review-queue-choice" data-review-select="${escapeText(review.id)}" aria-pressed="false"><strong>${escapeText(review.source_title || review.question)}</strong><span>承認待ち · Run ${escapeText(review.run_id)}</span></button>`).join("") || '<p class="empty-state">承認待ちのレビューはありません。</p>'}
+        </div>
+        <section id="review-selection" aria-label="選択したレビュー"><p class="empty-state">レビューを選ぶと全体コメントと承認操作を表示します。</p></section>
+        ${["approved", "rejected", "feedback"].map((status) => `<details class="review-archive" data-review-history="${status}"><summary>${status === "approved" ? "承認" : status === "rejected" ? "却下" : "送信した回答の"}履歴</summary><div class="review-archive-body"></div></details>`).join("")}
+      </article>`;
+    byId("editor-content").querySelectorAll("[data-review-select]").forEach((button) => {
+      button.addEventListener("click", () => selectReview(reviews.find((item) => item.id === button.dataset.reviewSelect)));
+    });
+    byId("editor-content").querySelectorAll("[data-review-history]").forEach((details) => {
+      details.addEventListener("toggle", async () => {
+        if (!details.open || details.dataset.loaded) return;
+        details.dataset.loaded = "true";
+        const body = details.querySelector(".review-archive-body");
+        try {
+          const history = await api(details.dataset.reviewHistory === "feedback" ? "/api/review-feedback-history" : `/api/reviews?status=${details.dataset.reviewHistory}`);
+          body.innerHTML = history.map((review) => `<div class="review-history-item"><button type="button" class="review-queue-choice" data-history-select="${escapeText(review.id)}"><strong>${escapeText(review.source_title || review.question)}</strong><span>回答記録を確認 · Run ${escapeText(review.run_id)}</span></button>${review.status === "approved" && approvedOutputReviews([review]).length ? approvedReviewMarkup(review) : ""}</div>`).join("") || '<p class="empty-state">履歴はありません。</p>';
+          body.querySelectorAll("[data-history-select]").forEach((button) => button.addEventListener("click", () => selectReview(history.find((item) => item.id === button.dataset.historySelect))));
+          body.querySelectorAll(".draft-open").forEach((button) => button.addEventListener("click", openDraftPreview));
+          body.querySelectorAll(".manuscript-draft-open").forEach((button) => button.addEventListener("click", openManuscriptDraftPreview));
+          body.querySelectorAll(".review-output-recover").forEach((button) => button.addEventListener("click", recoverApprovedReviewOutput));
+        } catch (error) { delete details.dataset.loaded; body.textContent = error.message; }
+      });
+    });
+    const selected = reviews.find((review) => review.id === selectedReviewId) || reviews[0];
+    if (selected) await selectReview(selected);
+    else { selectedReviewId = null; byId("review-inspector").hidden = true; byId("inspector-default").hidden = false; }
+  } catch (error) { addProblem(error.message); }
 }
 
 async function discardManuscriptRewrite(event) {
@@ -1511,6 +1447,10 @@ async function resolveReview(event) {
   button.disabled = true;
   try {
     const reviewId = button.dataset.review;
+    const entry = reviewDrafts.entries.get(reviewId);
+    if (entry && (entry.dirty || entry.packet.answers.length || entry.packet.overall_comment.trim())) {
+      await saveReviewDraft(reviewId, true);
+    }
     let feedback = document.querySelector(`[data-review-feedback="${CSS.escape(reviewId)}"]`)?.value || "";
     const sourceInputs = [...document.querySelectorAll(`[data-review-source="${CSS.escape(reviewId)}"]`)];
     if (sourceInputs.length && button.dataset.decision === "revise") {
@@ -1536,6 +1476,7 @@ async function resolveReview(event) {
         claim_id: claimId,
       }),
     });
+    reviewDrafts.entries.delete(reviewId);
     connectToRun(result.run_id);
     await renderReviewEditor();
   } catch (error) {
@@ -3952,6 +3893,7 @@ function connectToRun(runId) {
 
 function activateActivity(activity, { remember = true } = {}) {
   state.activity = activity;
+  if (activity !== "review") document.querySelector(".workbench").classList.remove("mobile-review-open");
   document.querySelectorAll(".activity-button[data-activity]").forEach((item) => {
     item.classList.toggle("active", item.dataset.activity === activity);
   });
@@ -3990,6 +3932,7 @@ function showDraftPreview({ artifactId, title, previewUrl, sourceUrl }) {
   document.querySelector(".workbench").classList.add("draft-docked");
   byId("inspector-title").textContent = "Draft Review";
   byId("inspector-default").hidden = true;
+  byId("review-inspector").hidden = true;
   byId("draft-inspector").hidden = false;
   byId("draft-inspector-name").textContent = title;
   byId("draft-source-link").href = sourceUrl;
@@ -4000,7 +3943,7 @@ function showDraftPreview({ artifactId, title, previewUrl, sourceUrl }) {
 function closeDraftPreview() {
   state.draftPreview = null;
   document.querySelector(".workbench").classList.remove("draft-docked");
-  byId("inspector-title").textContent = "Context";
+  byId("inspector-title").textContent = "レビュー";
   byId("draft-inspector").hidden = true;
   byId("draft-inspector-frame").src = "about:blank";
   byId("inspector-default").hidden = false;

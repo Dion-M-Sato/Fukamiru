@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +15,7 @@ from fukamiru.authoring.evidence_contracts import (
     canonical_hash,
     classify_findings,
     compile_draft_evidence,
+    draft_source_use_constraints,
     draft_support_anchor_problems,
     project_argument_evidence_sources,
     result_status,
@@ -355,6 +357,46 @@ def test_multi_sentence_evidence_requires_an_unambiguous_support_location():
     _, uses, _, _ = compile_draft_evidence(context, [section])
     assert uses[0].sentence_id == "S1-P01-S02"
     assert uses[0].supported_content == "確認済みの事実から結果を述べる。"
+
+
+def test_source_constraints_repair_memo_use_without_promoting_source():
+    context = {"propositions": [{"id": "P1", "text": "著者による解釈。"}],
+               "argument_nodes": [{"id": "E1", "node_type": "evidence",
+                                   "provenance": {"source_ids": ["P1"]}}]}
+    context["fixed_assets"] = build_fixed_assets(context).model_dump(mode="json")
+    section = {"section_id": "S1", "paragraphs": [{"text": "著者は関係が変わったと考える。",
+                "evidence_ids": ["E1"]}], "evidence_treatment": [{"evidence_id": "E1",
+                "claim_id": "C1", "prose_treatment": "externally_supported_fact"}]}
+    original = deepcopy(context)
+    with pytest.raises(FukamiruError, match="does not support claim role source_fact"):
+        compile_draft_evidence(context, [section])
+    constraints = draft_source_use_constraints(context, section)
+    permitted = {item["prose_treatment"]: item for item in constraints[0]["permitted_uses"]}
+    assert "externally_supported_fact" not in permitted
+    assert permitted["attributed_user_statement"]["claim_role"] == "memo_supported"
+    assert permitted["qualified_interpretation"]["verification_status"] == {"P1": "review_required"}
+    corrected = deepcopy(section)
+    corrected["evidence_treatment"][0]["prose_treatment"] = "attributed_user_statement"
+    assert draft_source_use_constraints(context, corrected) == []
+    _, uses, _, _ = compile_draft_evidence(context, [corrected])
+    assert uses[0].claim_role == "memo_supported"
+    assert uses[0].verification_status == "review_required"
+    assert context == original
+    assert section["evidence_treatment"][0]["prose_treatment"] == "externally_supported_fact"
+
+
+def test_source_constraints_offer_only_context_for_bibliographic_records():
+    context = {"evidence_context": [{
+        "id": "B1", "title": "書名", "verification_status": "verified",
+    }]}
+    context["fixed_assets"] = build_fixed_assets(context).model_dump(mode="json")
+    constraints = draft_source_use_constraints(context, {"evidence_treatment": [{
+        "evidence_id": "B1", "prose_treatment": "externally_supported_fact",
+    }]})
+    assert constraints[0]["permitted_uses"] == [{
+        "prose_treatment": "attributed_scholarship", "claim_role": "contextual",
+        "source_ids": ["B1"], "verification_status": {"B1": "verified"},
+    }]
 
 
 def test_draft_cannot_promote_bibliographic_record_to_source_fact():

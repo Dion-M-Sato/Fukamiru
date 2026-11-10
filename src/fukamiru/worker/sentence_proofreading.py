@@ -26,6 +26,11 @@ from fukamiru.revisions.surface_warning import (
     run_batches,
 )
 from fukamiru.storage.events import EventRepository
+from fukamiru.storage.proofreading_generations import (
+    LEGACY_GENERATION,
+    draft_generation_id,
+    generation_id,
+)
 from fukamiru.storage.runs import utc_now
 
 PROMPT_VERSION = "llmjp-full-sentence-academic-v29.2-natural-prose"
@@ -114,31 +119,54 @@ def _log(
 
 def prepare_sentences(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
     original_html = str(context["proposed_html"])
+    generation = draft_generation_id(str(getattr(claimed, "workflow_name", "")),
+                                     str(getattr(claimed, "workflow_version", "")), context)
+    context = dict(context)
+    if generation != LEGACY_GENERATION:
+        context["_proofreading_generation_id"] = generation
+    else:
+        context.pop("_proofreading_generation_id", None)
+    sentence_scope = (claimed.run_id if generation == LEGACY_GENERATION else
+                      claimed.run_id + ":g:" + rules.digest(generation)[:16])
     sentences = rules.extract_sentences(
         original_html,
-        run_id=claimed.run_id,
+        run_id=sentence_scope,
         document_id=str(context["document_id"]),
         source_preserve_block_ids=set(
             worker._string_list(context.get("source_preserve_block_ids"))
         ),
     )
+    for item in sentences:
+        item["run_id"] = claimed.run_id
     registry, detections = rules.build_title_registry(original_html)
     if not sentences:
         raise FukamiruError("proofreading.no_eligible_sentences")
     with worker.databases.state.connect() as connection:
+        checkpoint = connection.execute(
+            "SELECT source_html_sha256 FROM manuscript_proofreading_generations "
+            "WHERE run_id=? AND generation_id=?", (claimed.run_id, generation),
+        ).fetchone()
+        if checkpoint and checkpoint[0] != rules.digest(original_html):
+            raise FukamiruError("proofreading.source_checkpoint_changed")
         existing = connection.execute(
-            "SELECT id,original_hash FROM manuscript_proofreading_sentences WHERE run_id=?",
-            (claimed.run_id,),
+            "SELECT id,original_hash FROM manuscript_proofreading_sentences "
+            "WHERE run_id=? AND generation_id=?", (claimed.run_id, generation),
         ).fetchall()
         prior = {str(x["id"]): str(x["original_hash"]) for x in existing}
         if prior and prior != {x["id"]: x["original_hash"] for x in sentences}:
             raise FukamiruError("proofreading.source_checkpoint_changed")
+        connection.execute(
+            "INSERT OR IGNORE INTO manuscript_proofreading_generations "
+            "(run_id,generation_id,source_html_sha256,producer_node_run_id,created_at) "
+            "VALUES (?,?,?,?,?)", (claimed.run_id, generation, rules.digest(original_html),
+                                   claimed.node_run_id, utc_now()),
+        )
         for item in sentences:
             connection.execute(
                 "INSERT OR IGNORE INTO manuscript_proofreading_sentences "
                 "(id,run_id,document_id,source_sentence_id,block_id,sentence_ordinal,start_offset,end_offset,"
-                "original_text,original_hash,status,created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,'detected',?)",
+                "original_text,original_hash,status,created_at,generation_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,'detected',?,?)",
                 (
                     item["id"],
                     claimed.run_id,
@@ -151,13 +179,15 @@ def prepare_sentences(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
                     item["original_text"],
                     item["original_hash"],
                     utc_now(),
+                    generation,
                 ),
             )
         for title, record in registry.items():
             connection.execute(
                 "INSERT OR IGNORE INTO manuscript_proofreading_title_registry "
-                "(run_id,title,evidence_json,confidence,created_at) VALUES (?,?,?,?,?)",
-                (claimed.run_id, title, _json(record), "high", utc_now()),
+                "(run_id,title,evidence_json,confidence,created_at,generation_id) "
+                "VALUES (?,?,?,?,?,?)",
+                (claimed.run_id, title, _json(record), "high", utc_now(), generation),
             )
         _log(
             connection,
@@ -257,9 +287,9 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
             dict(x)
             for x in connection.execute(
                 "SELECT * FROM manuscript_proofreading_sentences "
-                "WHERE run_id=? AND status!='segmentation_superseded' "
+                "WHERE run_id=? AND generation_id=? AND status!='segmentation_superseded' "
                 "ORDER BY block_id,sentence_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
     v31 = context.get("research_problem") is not None
@@ -358,8 +388,8 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
                             "raw_candidate_text,normalized_candidate_text,original_hash,"
                             "candidate_hash,generation_seed,generation_model,"
                             "generation_prompt_version,frequency,generation_seeds_json,"
-                            "status,created_at,updated_at) "
-                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'generated',?,?)",
+                            "status,created_at,updated_at,generation_id) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'generated',?,?,?)",
                             (
                                 patch_id,
                                 claimed.run_id,
@@ -377,6 +407,7 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
                                 _json(info["seeds"]),
                                 utc_now(),
                                 utc_now(),
+                                generation_id(context),
                             ),
                         )
                         _log(
@@ -438,8 +469,8 @@ def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, 
             str(x["title"]): json.loads(x["evidence_json"])
             for x in connection.execute(
                 "SELECT title,evidence_json FROM manuscript_proofreading_title_registry "
-                "WHERE run_id=?",
-                (claimed.run_id,),
+                "WHERE run_id=? AND generation_id=?",
+                (claimed.run_id, generation_id(context),),
             )
         }
         patches = [
@@ -447,9 +478,9 @@ def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, 
             for x in connection.execute(
                 "SELECT p.* FROM manuscript_proofreading_patches p "
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
-                "WHERE p.run_id=? AND s.status!='segmentation_superseded' "
+                "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
     counts = Counter()
@@ -557,10 +588,10 @@ def evaluate_luna(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[st
         patches = [
             dict(x)
             for x in connection.execute(
-                "SELECT * FROM manuscript_proofreading_patches WHERE run_id=? "
+                "SELECT * FROM manuscript_proofreading_patches WHERE run_id=? AND generation_id=? "
                 "AND status IN ('luna_pending','luna_unavailable') "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
     by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -778,9 +809,10 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
         sentences = [
             dict(row)
             for row in connection.execute(
-                "SELECT * FROM manuscript_proofreading_sentences WHERE run_id=? "
+                "SELECT * FROM manuscript_proofreading_sentences "
+                "WHERE run_id=? AND generation_id=? "
                 "AND status!='segmentation_superseded' ORDER BY block_id,sentence_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
         patches = [
@@ -788,9 +820,9 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
             for row in connection.execute(
                 "SELECT p.* FROM manuscript_proofreading_patches p "
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
-                "WHERE p.run_id=? AND s.status!='segmentation_superseded' "
+                "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY p.sentence_id,p.candidate_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
     clean_by_sentence: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -918,9 +950,9 @@ def select_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
             for x in connection.execute(
                 "SELECT p.* FROM manuscript_proofreading_patches p "
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
-                "WHERE p.run_id=? AND s.status!='segmentation_superseded' "
+                "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
     by_sentence: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1109,15 +1141,17 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
         sentences = [
             dict(x)
             for x in connection.execute(
-                "SELECT * FROM manuscript_proofreading_sentences WHERE run_id=? "
+                "SELECT * FROM manuscript_proofreading_sentences "
+                "WHERE run_id=? AND generation_id=? "
                 "AND status!='segmentation_superseded'",
-                (claimed.run_id,),
+                (claimed.run_id, generation_id(context),),
             )
         ]
         patches = [
             dict(x)
             for x in connection.execute(
-                "SELECT * FROM manuscript_proofreading_patches WHERE run_id=?", (claimed.run_id,)
+                "SELECT * FROM manuscript_proofreading_patches WHERE run_id=? AND generation_id=?",
+                (claimed.run_id, generation_id(context)),
             )
         ]
     sentence_by_id = {x["id"]: x for x in sentences}
@@ -1187,10 +1221,10 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
         with worker.databases.state.connect() as connection:
             connection.execute(
                 "UPDATE manuscript_proofreading_patches SET selected=0,applied=0,"
-                "updated_at=? WHERE run_id=? AND id IN ({})".format(
+                "updated_at=? WHERE run_id=? AND generation_id=? AND id IN ({})".format(
                     ",".join("?" for _ in locked_selected_ids)
                 ),
-                (utc_now(), claimed.run_id, *sorted(locked_selected_ids)),
+                (utc_now(), claimed.run_id, generation_id(context), *sorted(locked_selected_ids)),
             )
             for patch in selected:
                 if str(patch["id"]) not in locked_selected_ids:
@@ -1228,10 +1262,11 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
             with worker.databases.state.connect() as connection:
                 connection.execute(
                     "UPDATE manuscript_proofreading_patches SET selected=0,applied=0,"
-                    "updated_at=? WHERE run_id=? AND id IN ({})".format(
+                    "updated_at=? WHERE run_id=? AND generation_id=? AND id IN ({})".format(
                         ",".join("?" for _ in reader_facing_rejected_ids)
                     ),
-                    (utc_now(), claimed.run_id, *sorted(reader_facing_rejected_ids)),
+                    (utc_now(), claimed.run_id, generation_id(context),
+                     *sorted(reader_facing_rejected_ids)),
                 )
                 for patch in selected:
                     if str(patch["id"]) not in reader_facing_rejected_ids:
@@ -1309,10 +1344,10 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
             connection.execute(
                 "UPDATE manuscript_proofreading_patches SET applied=CASE "
                 "WHEN id IN ({}) THEN 1 ELSE 0 END,updated_at=? "
-                "WHERE run_id=?".format(
+                "WHERE run_id=? AND generation_id=?".format(
                     ",".join("?" for _ in applied_ids) or "NULL"
                 ),
-                (*sorted(applied_ids), utc_now(), claimed.run_id),
+                (*sorted(applied_ids), utc_now(), claimed.run_id, generation_id(context)),
             )
             for patch in selected:
                 was_applied = str(patch["id"]) in applied_ids

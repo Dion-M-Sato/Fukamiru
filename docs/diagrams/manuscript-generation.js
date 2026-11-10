@@ -196,6 +196,14 @@
     const added = newCopy[current.id];
     const override = {
       ...currentCopyOverrides[current.id], ...source.research_policy?.[current.id],
+      ...source.review_policy?.[current.id],
+      ...(current.id === "draft_rewrite" ? source.reader_brief_excerpt_policy : {}),
+      ...(current.id === "start_paragraph_formation" ? source.candidate_generation_policy : {}),
+      ...(current.id === "extract_proofreading_sentences" ? source.proofreading_generation_policy : {}),
+      ...(current.id === "render_evidence_footnotes" ? source.empty_citation_projection_policy : {}),
+      ...(["finalize_authoring", "human_approval"].includes(current.id) ? source.submission_revalidation_policy : {}),
+      ...(["reconcile_candidate_context", "reconcile_candidate_context_after_proofreading"]
+        .includes(current.id) ? source.evidence_identity_policy : {}),
     };
     const node = {
       ...current, order,

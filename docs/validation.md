@@ -40,3 +40,37 @@ visual comparison in a real browser remains manual.
 - The workflow diagram generator reproduced the checked-in data for the UI-linked diagram.
 - The Python suite passed all 1,931 tests. All 56 UI tests passed, along with Ruff,
   the Git whitespace check, and the publication guard.
+
+## Review workspace and node generation management (2026-11-10)
+
+The review workspace keeps selection, overall comments and decisions in the center,
+with per-question answers and isolated HTML in the right pane. Submitted answers and
+LLM-overreach judgments are retained as review history and carried into later writing
+and audit requests. Optimistic revisions protect concurrent edits and late valid drafts.
+
+Human-requested regeneration starts a new candidate generation while retaining fixed
+arguments, protected human text and author answers. Proofreading candidates and logs
+are scoped to that generation. Citation identity and source capabilities remain checked.
+Limited recovery paths preserve failed inputs, prior results and bibliographic provenance.
+Existing migrations are unchanged; migrations 0053 through 0055 add the required state.
+
+The distributed source keeps its HTML output, module names and independent fictional
+examples. No personal manuscripts, live Run records, databases, local configuration or
+operational logs are part of this change. External inference and live providers were not
+used for these checks.
+
+- Python suite: 1,997 passed, no failures or skips (849.33 seconds).
+- Focused generation, review, migration, bibliography and diagram tests: 84 passed.
+- Fictional excerpt and readable-question regressions after fixture editing: 7 passed.
+- UI syntax and unit checks: 58 passed.
+- Headless Edge: review switching, autosave, checkbox-only submission, reload, conflict
+  recovery, HTML isolation, enlarged HTML and keyboard tabs passed. Desktop and 390px
+  mobile screenshots were inspected; the return action and layout were correct.
+  No external preview requests or JavaScript errors occurred.
+- Ruff, workflow graph generation check, diagram JavaScript syntax and Git whitespace:
+  passed. The UI-linked current graph has 71 nodes and 87 edges.
+- Publication guard: 449 tracked source files passed, including the staged new files.
+
+The pytest configuration was explicitly checked to import the API and node repository
+from this public checkout rather than the shared environment's editable installation.
+The installed HTTP test dependency continues to emit its existing deprecation warning.

@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#172713">
   <title>ふかみる Fukamiru · Bibliography-Aware User-Guided Layered Language-Model Engine for Texts</title>
-  <link rel="stylesheet" href="/src/styles.css">
+  <link rel="stylesheet" href="/src/styles.css?v=20261109-review-workspace-1">
 </head>
 <body>
   <main class="workbench" aria-label="ふかみる research workspace">
@@ -78,22 +78,24 @@
     </section>
 
     <aside id="inspector-pane" class="inspector" aria-label="Inspector">
-      <div class="pane-title" id="inspector-title">Context</div>
+      <div class="pane-title" id="inspector-title">レビュー</div>
       <div class="inspector-content">
         <div id="inspector-default">
-          <section class="inspector-section">
+          <p class="empty-state">レビュー待ち一覧で対象を選ぶと、本文と質問をここに表示します。</p>
+          <section class="inspector-section" hidden>
             <h2>System</h2>
             <dl id="system-status" class="property-list">
               <div><dt>Status</dt><dd>Connecting…</dd></div>
             </dl>
           </section>
-          <section class="inspector-section">
+          <section class="inspector-section" hidden>
             <h2>Runs</h2>
             <dl id="run-status" class="property-list">
               <div><dt>Run</dt><dd>None</dd></div>
             </dl>
           </section>
         </div>
+        <section id="review-inspector" hidden aria-label="選択したレビューの本文と質問"></section>
         <section id="draft-inspector" class="draft-inspector" hidden>
           <header class="draft-viewer-toolbar">
             <div>
@@ -206,6 +208,10 @@
       </dl>
     </div>
   </dialog>
-  <script type="module" src="/src/app.js"></script>
+  <dialog id="review-html-modal" class="draft-modal" aria-label="レビュー対象のHTML原稿">
+    <header class="draft-viewer-toolbar"><strong>レビュー対象のHTML</strong><form method="dialog"><button class="icon-action" aria-label="HTMLを閉じる">×</button></form></header>
+    <iframe id="review-html-modal-frame" sandbox title="レビュー対象のHTML原稿・拡大表示"></iframe>
+  </dialog>
+  <script type="module" src="/src/app.js?v=20261109-review-workspace-1"></script>
 </body>
 </html>

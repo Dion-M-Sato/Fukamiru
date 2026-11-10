@@ -40,6 +40,7 @@ from fukamiru.local_llm import LlamaServerAdapter
 from fukamiru.ocr import DocumentOCRService, OCRCanonicalHTMLRenderer, OCRRevisionRepository
 from fukamiru.projects.dissertation import DissertationService
 from fukamiru.projects.service import ProjectService
+from fukamiru.review_feedback import ReviewFeedbackService, feedback_context
 from fukamiru.revisions import (
     CandidateApplicationService,
     CollocationRepository,
@@ -113,6 +114,21 @@ from fukamiru.workflow.templates import (
 )
 
 
+class VerifiedBookMetadataCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reference_id: str = Field(min_length=1, max_length=1000)
+    title: str = Field(min_length=1, max_length=4000)
+    authors: list[str] = Field(min_length=1, max_length=50)
+    translators: list[str] = Field(default_factory=list, max_length=50)
+    publisher: str = Field(min_length=1, max_length=2000)
+    year: str = Field(pattern=r"^\d{4}$")
+    isbn: str = Field(min_length=13, max_length=30)
+    publication_language: Literal["ja", "en", "fr", "de", "ru"]
+    source_kind: Literal["publisher", "library_catalog"]
+    source_url: str = Field(min_length=1, max_length=8000)
+
+
 class CreateRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -156,6 +172,23 @@ class ResolveReviewRequest(BaseModel):
     feedback: str = Field(default="", max_length=10000)
     corrected_text: str | None = Field(default=None, max_length=2000000)
     claim_id: str | None = Field(default=None, max_length=200)
+
+
+class ReviewAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str = Field(min_length=1, max_length=500)
+    answer: str = Field(default="", max_length=10000)
+    llm_overreach: bool = False
+
+
+class ReviewFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revision: int = Field(ge=0)
+    answers: list[ReviewAnswerRequest] = Field(default_factory=list, max_length=5000)
+    overall_comment: str = Field(default="", max_length=10000)
+    submit: bool = False
 
 
 class CorrectOCRRequest(BaseModel):
@@ -353,7 +386,7 @@ class ReviseManuscriptRewriteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     workflow_version: str | None = Field(default=None, pattern="^(22|23|24|25|26|27|28|29)$")
-    human_review: str = Field(min_length=1, max_length=50000)
+    human_review: str = Field(default="", max_length=50000)
 
 
 class SelectManuscriptPolishCandidateRequest(BaseModel):
@@ -1345,12 +1378,17 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
 
         workflow = workflows["manuscript_rewrite"]
         human_review = request.human_review.strip()
-        if not human_review:
-            raise HTTPException(status_code=422, detail="A revision comment is required")
         with databases.state.connect() as connection:
             service = ManuscriptRewriteService(connection)
             try:
                 source = service.get(proposal_id)
+                question_feedback = feedback_context(connection, str(source["run_id"]))
+                if not human_review and not (
+                    question_feedback["answers"] or question_feedback["overall_comments"]
+                ):
+                    raise HTTPException(status_code=422, detail="A revision comment is required")
+                if question_feedback["answers"] or question_feedback["overall_comments"]:
+                    human_review += "\n" + json.dumps(question_feedback, ensure_ascii=False)
                 if str(source["lifecycle_status"]) != "pending":
                     raise FukamiruError("Only a pending manuscript proposal can be revised")
                 parent_run = connection.execute(
@@ -1397,6 +1435,7 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                             or "人間の修正コメントに基づいて原稿を改稿する。"
                         ),
                         "human_review": human_review,
+                        "human_question_feedback": question_feedback,
                         "use_rag": bool(parent_inputs.get("use_rag", source.get("use_rag", True))),
                         "use_online_research": bool(parent_inputs.get("use_online_research", True)),
                         "use_llm_jp": bool(parent_inputs.get("use_llm_jp", True)),
@@ -2214,7 +2253,9 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         return {"run_id": run_id, "status": cancelled["status"]}
 
     @app.post("/api/runs/{run_id}/replay-failed-authoring-node")
-    def replay_failed_authoring_node(run_id: str) -> dict[str, Any]:
+    def replay_failed_authoring_node(
+        run_id: str, correction: VerifiedBookMetadataCorrectionRequest | None = None,
+    ) -> dict[str, Any]:
         with databases.state.connect() as connection:
             repository = RunRepository(connection)
             try:
@@ -2222,6 +2263,10 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             except FukamiruError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
             try:
+                if correction is not None:
+                    return repository.replay_failed_authoring_node(
+                        run_id, verified_book_metadata=correction.model_dump(),
+                    )
                 return repository.replay_failed_authoring_node(run_id)
             except FukamiruError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2764,6 +2809,45 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                         else None
                     )
         return {**defect, "source": source}
+
+    @app.get("/api/review-feedback-history")
+    def review_feedback_history() -> list[dict[str, Any]]:
+        with databases.state.connect() as connection:
+            return [dict(row) for row in connection.execute(
+                "SELECT f.review_id AS id,f.run_id,COALESCE(h.object_type,q.object_type) "
+                "AS object_type,COALESCE(h.object_id,q.object_id) AS object_id,"
+                "COALESCE(h.status,q.status) AS status,COALESCE(h.question,q.question) "
+                "AS question,q.source_title FROM review_feedback f "
+                "LEFT JOIN human_reviews h ON h.id=f.review_id "
+                "LEFT JOIN review_queue_entries q ON q.id=f.review_id "
+                "WHERE f.submitted_revision IS NOT NULL ORDER BY f.submitted_at DESC"
+            )]
+
+    @app.get("/api/reviews/{review_id}/feedback")
+    def get_review_feedback(review_id: str) -> dict[str, Any]:
+        with databases.state.connect() as connection:
+            try:
+                result = ReviewFeedbackService(connection).get(review_id)
+                connection.commit()
+                return result
+            except FukamiruError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.put("/api/reviews/{review_id}/feedback")
+    def save_review_feedback(review_id: str, request: ReviewFeedbackRequest) -> dict[str, Any]:
+        with databases.state.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                result = ReviewFeedbackService(connection).save(
+                    review_id, revision=request.revision,
+                    answers=[item.model_dump() for item in request.answers],
+                    overall_comment=request.overall_comment, submit=request.submit,
+                )
+                connection.commit()
+                return result
+            except FukamiruError as exc:
+                connection.rollback()
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/reviews/{review_id}/resolve")
     def resolve_review(review_id: str, request: ResolveReviewRequest) -> dict[str, Any]:

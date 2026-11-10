@@ -36,6 +36,10 @@ def test_v32_diagram_serves_current_academic_search_policy() -> None:
     }
     assert "Retry-After" in payload["research_policy"]["resolve_manuscript_evidence"]["summary"]
     assert "preferred" in payload["research_policy"]["bounded_research_retry"]["summary"]
+    assert "LLMの過剰要求である" in payload["review_policy"]["human_approval"]["summary"]
+    assert ("human_approval", "start_paragraph_formation", "failure") in {
+        (edge["from"], edge["to"], edge["condition"]) for edge in payload["edges"]
+    }
     script = (root / "docs/diagrams/manuscript-generation.js").read_text(encoding="utf-8")
     assert "source.research_policy?.[current.id]" in script
     handoff = _workflow_registry()["research_source_ingestion"]
@@ -153,3 +157,101 @@ def test_v32_dag_tracks_current_workflow_and_one_pass_prose() -> None:
     assert {
         node["id"]: node["max_attempts"] for node in payload["nodes"]
     }["redraft_body_prose"] == 1
+
+
+def test_reader_brief_excerpt_policy_is_displayed_in_current_graph() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    policies = []
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    policies.append(payload["reader_brief_excerpt_policy"])
+    assert "完全一致" in policies[-1]["summary"]
+    assert "監査判断・理由・対象ID・指摘件数は変更できず" in policies[-1]["summary"]
+    assert "人名の頭文字" in policies[-1]["summary"]
+    assert "不明判定は引き続き停止" in policies[-1]["summary"]
+    assert "固定資料の支援役割" in policies[-1]["summary"]
+    assert "対象節の修正指示へ返" in policies[-1]["summary"]
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    assert 'current.id === "draft_rewrite" ? source.reader_brief_excerpt_policy' in script
+
+
+def test_evidence_identity_generation_policy_is_displayed_in_reconciliation_nodes() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    policies = []
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    policies.append(payload["evidence_identity_policy"])
+    assert "校正での対応変更を拒否" in policies[-1]["summary"]
+    assert "直前の完了済み起草結果との完全一致" in policies[-1]["summary"]
+    assert "校正後の同じエラーはこの復旧の対象外" in policies[-1]["summary"]
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    nodes = '["reconcile_candidate_context", "reconcile_candidate_context_after_proofreading"]'
+    assert nodes in script
+    assert '.includes(current.id) ? source.evidence_identity_policy' in script
+
+
+def test_candidate_generation_reset_and_recovery_are_displayed_in_current_graph() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    assert "人間の回答を保って" in payload["candidate_generation_policy"]["summary"]
+    assert "一度本文統合へ戻" in payload["candidate_generation_policy"]["summary"]
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    assert 'source.candidate_generation_policy' in script
+
+
+def test_proofreading_generation_policy_is_displayed_in_current_graph() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    policy = payload["proofreading_generation_policy"]["summary"]
+    assert "同じ世代の元本文変更は停止" in policy
+    assert "旧候補・選択・適用・ログを保持" in policy
+    assert "校正抽出から一度再開" in policy
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    assert "source.proofreading_generation_policy" in script
+
+
+def test_empty_citation_projection_and_limited_recovery_are_displayed() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    policy = payload["empty_citation_projection_policy"]["summary"]
+    assert "出典対応がないと確定した段落も投影済み" in policy
+    assert "既存の引用を全て保ち" in policy
+    assert "一度校正後統合へ戻" in policy
+    assert "不確実性の指摘を残して後段の本文修正へ" in policy
+    assert "未確認を検証済みへ変更しません" in policy
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    assert "source.empty_citation_projection_policy" in script
+
+
+def test_submission_revalidation_intent_and_recovery_are_displayed() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    policy = payload["submission_revalidation_policy"]["summary"]
+    assert "再生成依頼を本文世代をまたいで保持" in policy
+    assert "承認済み候補は置き換えません" in policy
+    assert "印だけを復元して一度最終保存へ" in policy
+    assert "送信済み回答と対象・要求文が一致する" in policy
+    assert "現在の下書きは隠しません" in policy
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    assert "source.submission_revalidation_policy" in script
+
+
+def test_every_current_diagram_node_belongs_to_an_existing_lane() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    source = (root / "manuscript-generator-node-copy.js").read_text(encoding="utf-8")
+    shared = json.loads(source.split("= ", 1)[1].rsplit(";", 1)[0])
+    shared_lanes = {node["id"]: node["lane"] for node in shared["nodes"]}
+    lane_ids = {lane["id"] for lane in shared["lanes"]}
+    source = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    graph = json.loads(source.split("= ", 1)[1].rsplit(";", 1)[0])
+    script = (root / "manuscript-generation.js").read_text(encoding="utf-8")
+    match = re.search(r"const newLane = \{(.*?)\};", script, re.DOTALL)
+    assert match is not None
+    added_lanes = dict(re.findall(r'(\w+): "(\w+)"', match[1]))
+    for node in graph["nodes"]:
+        lane = shared_lanes.get(node["id"]) or added_lanes.get(node["id"])
+        assert lane in lane_ids, (node["id"], lane)

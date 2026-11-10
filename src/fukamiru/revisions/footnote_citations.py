@@ -439,10 +439,30 @@ class EvidenceFootnotePlanner:
             lambda match: re.sub(r"[^\r\n]", " ", match.group()),
             text,
         )
+        # Preserve original offsets while treating internal name/title initials
+        # as part of a mention, rather than sending a truncated sentence to the
+        # attribution auditor. A different cited author may precede this name.
+        internal_periods: set[int] = set()
+        for mention in dict.fromkeys(candidates):
+            if not mention:
+                continue
+            for match in re.finditer(re.escape(mention), search_text):
+                internal_periods.update(
+                    match.start() + index for index, char in enumerate(mention)
+                    if char in ".．" and any(value.isalnum() for value in mention[index + 1:])
+                )
+        for match in re.finditer(
+            r"[ァ-ヺー]+[・･](?:[A-Za-zＡ-Ｚａ-ｚ][.．][ \t]*[・･]?)+[ァ-ヺー]+",
+            search_text,
+        ):
+            internal_periods.update(
+                match.start() + index for index, char in enumerate(match.group())
+                if char in ".．"
+            )
         sentence_ranges: list[tuple[int, int]] = []
         sentence_start = 0
         for index, char in enumerate(search_text):
-            if char in _SENTENCE_PUNCTUATION:
+            if char in _SENTENCE_PUNCTUATION and index not in internal_periods:
                 sentence_ranges.append((sentence_start, index + 1))
                 sentence_start = index + 1
         if sentence_start < len(search_text):

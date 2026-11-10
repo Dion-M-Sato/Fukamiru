@@ -27,6 +27,17 @@ from fukamiru.worker.sentence_proofreading import (
 )
 
 
+def _add_generation_columns(database: SQLiteDatabase) -> None:
+    # These focused fixtures create only the columns used by their operation.
+    # Match migration 0055 after inserting their legacy example records.
+    with database.connect() as connection:
+        for table in ("manuscript_proofreading_sentences", "manuscript_proofreading_patches",
+                      "manuscript_proofreading_title_registry"):
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone():
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN generation_id "
+                                   "TEXT NOT NULL DEFAULT 'legacy'")
+
+
 def test_v29_generation_contract_still_uses_one_three_candidate_response() -> None:
     calls = []
 
@@ -74,6 +85,7 @@ def test_v31_generation_samples_three_times_and_keeps_distinct_candidates(
 
     monkeypatch.setattr("fukamiru.worker.sentence_proofreading._log", lambda *_a, **_k: None)
     monkeypatch.setattr("fukamiru.worker.sentence_proofreading._event", lambda *_a, **_k: None)
+    _add_generation_columns(db)
     worker = SimpleNamespace(
         databases=SimpleNamespace(state=db),
         llm_jp=SimpleNamespace(model_identity="local-test", complete_json=complete_json),
@@ -307,6 +319,7 @@ def test_v30_selection_applies_only_sol_high_confidence_decisions(
             "(?, 'run', ?, 'clean', 1, 0, ?, ?, 1, ?, ?, 'now')",
             [(*row, clean, ordinal) for ordinal, row in enumerate(rows)],
         )
+    _add_generation_columns(db)
     worker = SimpleNamespace(databases=SimpleNamespace(state=db))
     claimed = SimpleNamespace(run_id="run", node_run_id="node")
 
@@ -388,6 +401,7 @@ def test_v30_ranker_includes_original_and_auto_selects_only_high_confidence(
             }
         ]
 
+    _add_generation_columns(db)
     worker = SimpleNamespace(
         databases=SimpleNamespace(state=db),
         _authoring_parallel_generate=generate,
@@ -471,6 +485,7 @@ def test_shadow_surface_normalization_makes_source_changed_patch_stale(
         "fukamiru.worker.sentence_proofreading.ManuscriptDiscourseService.predicate_candidates",
         lambda *args, **kwargs: [],
     )
+    _add_generation_columns(db)
     worker = SimpleNamespace(
         databases=SimpleNamespace(state=db),
         _manuscript_predicate_inventory_record=lambda value: value,
@@ -579,6 +594,7 @@ def test_selected_clean_candidate_is_applied_to_proposed_manuscript(
         "fukamiru.worker.sentence_proofreading.ManuscriptDiscourseService.predicate_candidates",
         capture_predicate_source,
     )
+    _add_generation_columns(db)
     worker = SimpleNamespace(
         databases=SimpleNamespace(state=db),
         _manuscript_predicate_inventory_record=lambda value: value,
@@ -679,6 +695,7 @@ def test_locked_authoring_text_rejects_only_overlapping_selected_patch(
         "fukamiru.worker.sentence_proofreading.ManuscriptDiscourseService.predicate_candidates",
         lambda *args, **kwargs: [],
     )
+    _add_generation_columns(db)
     worker = SimpleNamespace(
         databases=SimpleNamespace(state=db),
         _manuscript_predicate_inventory_record=lambda value: value,

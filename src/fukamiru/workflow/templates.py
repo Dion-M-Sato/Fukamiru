@@ -1956,6 +1956,8 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
         ("evaluate_human_revision_requirement", "finalize_authoring", "success"),
         ("finalize_authoring", "submission_package", "success"),
         ("submission_package", "human_approval", "success"),
+        *([("human_approval", "start_paragraph_formation", "failure")]
+          if structure_aware else []),
     ]
     edges = [
         EdgeSpec(source=source, target=target, condition=condition)

@@ -12344,7 +12344,8 @@ academic_research_online = false
             self.assertRaises(DraftProjectionReached),
         ):
             self.worker._authoring_draft_sections_v31(
-                SimpleNamespace(run_id="run-1", workflow_version="31"), context
+                SimpleNamespace(run_id="run-1", workflow_version="31", node_run_id="draft-1"),
+                context,
             )
 
         replay_context = observed["context"]

@@ -57,12 +57,30 @@ def digest(html: str) -> str:
     return hashlib.sha256(html.encode("utf-8")).hexdigest()
 
 
+def reader_paragraph_text(html: str) -> dict[str, str]:
+    """Keep superscript note labels out of the prose sent to the reader reviewer."""
+    def text(node: ET.Element) -> str:
+        if node.tag == "sup" and any(
+            anchor.get("role") == "doc-noteref" for anchor in node.iter("a")
+        ):
+            return ""
+        return (node.text or "") + "".join(text(child) + (child.tail or "") for child in node)
+
+    return {str(p.get("id")): text(p) for p in _parse(html).iter("p")}
+
+
 def validate_handoff(context: dict[str, Any]) -> None:
     report = context.get("prose_redraft_report_v31")
     if report is None:  # Already executed V31 runs remain readable.
         return
     candidate_sha = digest(str(context.get("proposed_html") or ""))
     prose_sha = report.get("target_html_sha256") if isinstance(report, dict) else None
+    transitions = report.get("paragraph_transitions") if isinstance(report, dict) else None
+    if transitions is not None and (
+        transitions != context.get("paragraph_transition_report_v32")
+        or transitions.get("target_html_sha256") != prose_sha
+    ):
+        raise NonRetryableFukamiruError("Paragraph transition handoff has a stale validation")
     heading = context.get("heading_revision_report_v31")
     heading_handoff_valid = (
         isinstance(heading, dict)
@@ -96,6 +114,8 @@ def supersede_for_repair(context: dict[str, Any]) -> dict[str, Any]:
     updated = dict(context)
     report = updated.pop("prose_redraft_report_v31")
     updated.pop("prose_redraft_inference_ledger_v31", None)
+    updated.pop("paragraph_transition_report_v32", None)
+    updated.pop("concept_fit_final_audit_v32", None)
     updated["prose_redraft_history_v31"] = [
         *list(context.get("prose_redraft_history_v31") or []),
         {
@@ -106,7 +126,9 @@ def supersede_for_repair(context: dict[str, Any]) -> dict[str, Any]:
     updated["human_review_items"] = [
         item
         for item in context.get("human_review_items") or []
-        if not str(item.get("review_item_id") or "").startswith("prose-redraft:")
+        if not str(item.get("review_item_id") or "").startswith(
+            ("prose-redraft:", "transition:", "concept-fit:")
+        )
     ]
     updated["required_user_information"] = [
         item
@@ -152,7 +174,8 @@ def _at(node: ET.Element, path: tuple[int, ...]) -> ET.Element:
     return node
 
 
-def inventory(html: str, protected_ids: set[str] | None = None) -> list[dict[str, Any]]:
+def inventory(html: str, protected_ids: set[str] | None = None, *,
+              include_empty: bool = False) -> list[dict[str, Any]]:
     """Visit each paragraph once, including nested inline text and nested sections."""
     root = _parse(html)
     protected = protected_ids or set()
@@ -174,7 +197,7 @@ def inventory(html: str, protected_ids: set[str] | None = None) -> list[dict[str
             section = node
         if node.tag == "p" and section is not None and not excluded:
             visible = "".join(node.itertext())
-            if visible.strip():
+            if visible.strip() or include_empty:
                 paths = _slots(node, protected)
                 template = ET.fromstring(
                     ET.tostring(node, encoding="unicode"),
@@ -420,7 +443,7 @@ def manifest(
 ) -> list[dict[str, Any]]:
     """Record all structure and all text outside the eligible body text slots."""
     root = _parse(html)
-    editable_ids = {p["paragraph_id"] for p in inventory(html, protected_ids)}
+    editable_ids = {p["paragraph_id"] for p in inventory(html, protected_ids, include_empty=True)}
     protected = protected_ids or set()
     mutable: set[tuple[int, str]] = set()
     for paragraph in root.iter("p"):

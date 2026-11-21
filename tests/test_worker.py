@@ -13933,7 +13933,10 @@ academic_research_online = false
         self.assertEqual(second_snapshot["run"]["status"], "completed")
         second_corpus = CorpusSyncService(self.databases, self.settings).latest_snapshot()
         assert second_corpus is not None
-        self.assertEqual(second_corpus["batch"]["reused_count"], 1)
+        self.assertEqual(second_corpus["batch"]["discovered_count"], 0)
+        self.assertEqual(second_corpus["batch"]["reused_count"], 0)
+        self.assertEqual(second_corpus["items"][0]["status"], "skipped")
+        self.assertEqual(second_corpus["items"][0]["skip_reason"], "already_ingested")
 
     def test_corpus_sync_auto_routes_declared_pdf_language(self) -> None:
         managed = self.settings.paths.corpus_root / "managed_sources" / "scans"

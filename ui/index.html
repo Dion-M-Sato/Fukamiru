@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#172713">
   <title>ふかみる Fukamiru · Bibliography-Aware User-Guided Layered Language-Model Engine for Texts</title>
-  <link rel="stylesheet" href="/src/styles.css?v=20261109-review-workspace-1">
+  <link rel="stylesheet" href="/src/styles.css?v=0.33.0">
 </head>
 <body>
   <main class="workbench" aria-label="ふかみる research workspace">
@@ -96,6 +96,16 @@
           </section>
         </div>
         <section id="review-inspector" hidden aria-label="選択したレビューの本文と質問"></section>
+        <section id="search-report-inspector" hidden aria-label="選択した検索レポート">
+          <header class="search-report-toolbar">
+            <strong id="search-report-name">検索レポート</strong>
+            <div class="viewer-actions">
+              <a id="search-report-export" class="icon-action" href="#" download>HTML保存</a>
+              <button id="search-report-close" class="icon-action" type="button" aria-label="検索レポートを閉じて一覧へ戻る">×</button>
+            </div>
+          </header>
+          <iframe id="search-report-frame" sandbox title="検索レポート本文・要約と根拠の抜粋"></iframe>
+        </section>
         <section id="draft-inspector" class="draft-inspector" hidden>
           <header class="draft-viewer-toolbar">
             <div>
@@ -212,6 +222,6 @@
     <header class="draft-viewer-toolbar"><strong>レビュー対象のHTML</strong><form method="dialog"><button class="icon-action" aria-label="HTMLを閉じる">×</button></form></header>
     <iframe id="review-html-modal-frame" sandbox title="レビュー対象のHTML原稿・拡大表示"></iframe>
   </dialog>
-  <script type="module" src="/src/app.js?v=20261109-review-workspace-1"></script>
+  <script type="module" src="/src/app.js?v=0.33.0"></script>
 </body>
 </html>

@@ -119,6 +119,91 @@ semantic_enabled = false
         translation_script = self.client.get("/workflow-diagrams/translation-workflow.js")
         self.assertEqual(translation_script.status_code, 200)
 
+    def test_profile_contextual_proofreading_graph_and_diagram_match(self) -> None:
+        configured = replace(self.settings, translation=replace(
+            self.settings.translation, japanese_proofreading_profile="llmjp33b_high"))
+        with TestClient(create_app(configured, start_worker=False)) as client:
+            diagram = client.get("/workflow-diagrams/manuscript-generation.html")
+            self.assertEqual(diagram.status_code, 200)
+            self.assertIn("manuscript-proofreading-high-data.js", diagram.text)
+            data = client.get("/workflow-diagrams/manuscript-proofreading-high-data.js")
+            self.assertIn('"proofreading_profile": "llmjp33b_high"', data.text)
+            self.assertIn('"handler": "authoring.llmjp33b_propose"', data.text)
+
+    def test_new_profile_runs_pin_profile_and_do_not_fall_back_to_another_model(self) -> None:
+        from fukamiru.storage.database import DatabasePair
+
+        configured = replace(self.settings, translation=replace(
+            self.settings.translation, japanese_proofreading_profile="llmjp33b_high"))
+        databases = DatabasePair.from_settings(configured)
+        with databases.state.connect() as connection:
+            project = RevisionService(connection).register_project(
+                name="Contextual proofreading", root_path=str(self.root))
+        with TestClient(create_app(configured, start_worker=False)) as client:
+            request = {"workflow_name": "manuscript_generator", "project_id": project, "inputs": {
+                "note_text": "日本語の校正を確認する。", "use_rag": False, "use_llm_jp": True}}
+            rejected = client.post("/api/runs", json=request)
+            self.assertEqual(rejected.status_code, 503, rejected.text)
+            self.assertIn("dedicated endpoint", rejected.text)
+            request["inputs"]["use_llm_jp"] = False
+            created = client.post("/api/runs", json=request)
+            self.assertEqual(created.status_code, 201, created.text)
+            with databases.state.connect() as connection:
+                row = connection.execute("SELECT input_json FROM runs WHERE id=?",
+                                         (created.json()["run_id"],)).fetchone()
+            self.assertEqual(json.loads(row[0])["japanese_proofreading_profile"], "llmjp33b_high")
+
+    def test_profile_adoption_profile_serves_matching_graph_and_reports_backend_requirement(self):
+        configured = replace(self.settings, translation=replace(
+            self.settings.translation, japanese_proofreading_profile="llmjp33b_adopt"))
+        with TestClient(create_app(configured, start_worker=False)) as client:
+            with client.app.state.databases.state.connect() as connection:
+                project = RevisionService(connection).register_project(
+                    name="Daily adoption", root_path=str(self.root))
+            diagram = client.get("/workflow-diagrams/manuscript-generation.html")
+            self.assertIn("manuscript-proofreading-adopt-data.js", diagram.text)
+            graph = client.get("/workflow-diagrams/manuscript-proofreading-adopt-data.js")
+            self.assertIn('"handler": "authoring.llmjp_adopt_correct_sections_once"', graph.text)
+            self.assertIn('"model": "gpt-5.6-sol"', graph.text)
+            self.assertEqual(client.get("/api/health").json()["japanese_proofreading_profile"],
+                             "llmjp33b_adopt")
+            workflow = next(w for w in client.get("/api/workflows").json()
+                            if w["name"] == "manuscript_generator")
+            self.assertEqual(workflow["japanese_proofreading_profile"], "llmjp33b_adopt")
+            self.assertEqual(len(workflow["nodes"]), 64)
+            rejected = client.post("/api/runs", json={
+                "workflow_name": "manuscript_generator", "project_id": project, "inputs": {
+                    "note_text": "対象を分析する。", "use_rag": False, "use_llm_jp": True}})
+            self.assertEqual(rejected.status_code, 503, rejected.text)
+            self.assertIn("dedicated endpoint", rejected.text)
+
+    def test_managed_hf_backend_is_lazy_and_checks_credentials_before_run_creation(self):
+        from fukamiru.config import HFProofreadingSettings
+
+        configured = replace(self.settings,
+            translation=replace(self.settings.translation,
+                                japanese_proofreading_profile="llmjp33b_adopt"),
+            hf_proofreading=HFProofreadingSettings(enabled=True, namespace="tester"))
+        with (patch("fukamiru.local_llm.hf_jobs.token_available", return_value=None),
+              patch("fukamiru.local_llm.hf_api.HFJobsAPI.launch") as launch,
+              TestClient(create_app(configured, start_worker=False)) as client):
+            with client.app.state.databases.state.connect() as connection:
+                project = RevisionService(connection).register_project(
+                    name="Managed proofreading", root_path=str(self.root))
+            request = {"workflow_name": "manuscript_generator", "project_id": project,
+                       "inputs": {"note_text": "対象を分析する。", "use_rag": False,
+                                  "use_llm_jp": True}}
+            denied = client.post("/api/runs", json=request)
+            self.assertEqual(denied.status_code, 503, denied.text)
+            self.assertIn("HF Jobs authentication", denied.text)
+            with patch("fukamiru.local_llm.hf_jobs.token_available", return_value="test-token"):
+                ready = client.get("/api/health").json()["local_models"]["llm_jp_proofreading"]
+                self.assertEqual(ready["status"], "ready_on_demand")
+                self.assertTrue(ready["configured"])
+                created = client.post("/api/runs", json=request)
+                self.assertEqual(created.status_code, 201, created.text)
+            launch.assert_not_called()
+
     def test_read_source_passages_without_starting_a_run_or_index_rebuild(self) -> None:
         source = self.root / "passage.txt"
         source.write_text(
@@ -144,12 +229,12 @@ semantic_enabled = false
         liveness = self.client.get("/api/liveness")
         self.assertEqual(liveness.status_code, 200)
         self.assertEqual(liveness.json()["status"], "alive")
-        self.assertEqual(liveness.json()["version"], "0.32.1")
+        self.assertEqual(liveness.json()["version"], "0.33.0")
 
         health = self.client.get("/api/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.json()["status"], "ready")
-        self.assertEqual(health.json()["version"], "0.32.1")
+        self.assertEqual(health.json()["version"], "0.33.0")
         self.assertEqual(health.json()["configured_device"], "cpu")
         self.assertIn("actual_embedding_device", health.json())
         self.assertIn("torch_version", health.json())
@@ -239,7 +324,7 @@ semantic_enabled = false
         self.assertTrue(authoring["supports_proofreading_patches"])
         self.assertEqual(
             authoring_nodes["rank_proofreading_candidates"]["function_name_ja"],
-            "原文を含めて推敲候補を順位付け",
+            "原文と局所修正候補を比較して選択",
         )
         self.assertEqual(health.json()["semantic_retrieval"]["index"], "not_built")
         self.assertFalse(health.json()["semantic_retrieval"]["local_model_ready"])
@@ -1490,11 +1575,11 @@ semantic_enabled = false
         self.assertIn("ふかみる research workspace", response.text)
         self.assertIn("ふかみる Fukamiru", response.text)
         self.assertIn(
-            "styles.css?v=20261109-review-workspace-1",
+            "styles.css?v=0.33.0",
             response.text,
         )
         self.assertIn(
-            "app.js?v=20261109-review-workspace-1",
+            "app.js?v=0.33.0",
             response.text,
         )
         self.assertIn('data-activity="review" title="レビュー待ち一覧"', response.text)
@@ -1507,7 +1592,7 @@ semantic_enabled = false
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(response.headers["pragma"], "no-cache")
 
-        javascript = self.client.get("/src/app.js?v=20261109-review-workspace-1")
+        javascript = self.client.get("/src/app.js?v=0.33.0")
         self.assertEqual(javascript.status_code, 200)
         self.assertEqual(javascript.headers["cache-control"], "no-store, max-age=0")
         self.assertIn('from "./api.js"', javascript.text)
@@ -1515,6 +1600,11 @@ semantic_enabled = false
             'from "./run-labels.js"',
             javascript.text,
         )
+        self.assertIn('from "./run-progress.js"', javascript.text)
+        numeric_progress = self.client.get("/src/run-progress.js?v=source")
+        self.assertEqual(numeric_progress.status_code, 200)
+        self.assertIn("javascript", numeric_progress.headers["content-type"])
+        self.assertEqual(numeric_progress.headers["cache-control"], "no-store, max-age=0")
         self.assertIn('from "./run-recovery.js"', javascript.text)
         self.assertIn("/feedback`)", javascript.text)
         self.assertIn("LLMの過剰要求である", javascript.text)
@@ -3227,6 +3317,7 @@ semantic_enabled = false
                 "economy_priority_supported": False,
                 "research_argument_architecture": "role-specific-v31",
                 "footnote_marker_placement": "before-comma-and-period",
+                "concept_fit": "contextual-concept-fit-v1",
             },
         )
         self.assertEqual(
@@ -9222,6 +9313,57 @@ semantic_enabled = false
             self.assertEqual(self.client.post(
                 f"/api/runs/{other_id}/replay-failed-authoring-node"
             ).status_code, 409)
+
+    def test_v32_local_proofreading_api_keeps_audit_and_source_preview(self) -> None:
+        from fukamiru.revisions import proofreading_local as local
+        from fukamiru.worker import sentence_proofreading as pipeline
+
+        with self.app.state.databases.state.connect() as connection:
+            service = RevisionService(connection)
+            project = service.register_project(name="局所校正", root_path=str(self.root / "local"))
+            document = service.create_document(project_id=project, kind="paper", title="校正")
+            run = RunRepository(connection).create(
+                workflow_name="manuscript_generator", workflow_version="32",
+                entry_node="extract_proofreading_sentences", inputs={}, project_id=project,
+            )
+            node_id = connection.execute(
+                "SELECT id FROM node_runs WHERE run_id=?", (run.run_id,)
+            ).fetchone()[0]
+        source = '<article id="d" lang="ja"><p id="p">比較視角から考える。</p></article>'
+        context = {"document_id": document, "proposed_html": source, "use_llm_jp": True}
+
+        def complete(**kwargs):
+            payload = json.loads(kwargs["user_prompt"])
+            return {
+                **{key: payload[key] for key in local.IDENTITY_FIELDS},
+                "edits": [{"before": "比較視角", "after": "比較視点", "reason": "連語の修正"}],
+            }
+
+        worker = SimpleNamespace(
+            databases=self.app.state.databases, settings=self.settings,
+            llm_jp=SimpleNamespace(model_identity="fixture", complete_json=complete),
+            _string_list=lambda values: values or [], _raise_if_run_cancelled=lambda *a: None,
+            execute_local_llm=lambda operation, **kw: operation(),
+        )
+        claimed = SimpleNamespace(
+            run_id=run.run_id, node_run_id=node_id,
+            workflow_name="manuscript_generator", workflow_version="32",
+        )
+        context = pipeline.prepare_sentences(worker, claimed, context)
+        context = pipeline.generate_candidates(worker, claimed, context)
+        context["pre_proofreading_html"] = source
+        context["proposed_html"] = source.replace("比較視角", "比較視点")
+        with self.app.state.databases.state.connect() as connection:
+            connection.execute("UPDATE runs SET output_json=? WHERE id=?",
+                               (json.dumps(context), run.run_id))
+        result = self.client.get(f"/api/runs/{run.run_id}/proofreading-candidates")
+        self.assertEqual(result.status_code, 200)
+        body = result.json()
+        self.assertEqual(body["total"], 1)
+        record = body["records"][0]
+        self.assertEqual(record["preview_text"], "比較視点から考える。")
+        self.assertEqual(record["local_edit_audit"]["contract"], local.CONTRACT)
+        self.assertEqual(record["local_edit_audit"]["block_id"], "p")
 
     def test_proofreading_generation_recovery_preserves_old_rows_and_requires_new_scope(
         self,

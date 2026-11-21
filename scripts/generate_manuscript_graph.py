@@ -13,7 +13,10 @@ TARGET = ROOT / "docs/diagrams/manuscript-generation-data.js"
 
 
 def main() -> None:
-    data = export(version="32")
+    contextual = "--llmjp33b-high" in sys.argv
+    adoption = "--llmjp33b-adopt" in sys.argv
+    profile = "llmjp33b_adopt" if adoption else "llmjp33b_high" if contextual else "local_v32"
+    data = export(version="32", proofreading_profile=profile)
     if data["version"] != "32":
         raise ValueError("V32 diagram expects the V32 executable workflow")
     data["diagram_version"] = "32"
@@ -21,16 +24,83 @@ def main() -> None:
         workflow_name="research_source_ingestion_workflow")
     data["source_ingestion_workflow"].pop("paragraph_argument_move_catalog")
     data["review_policy"] = {
+        "generate_proofreading_candidates": {
+            "purpose": "文IDに対応する局所修正を生成",
+            "summary": (
+                "元の文ID・段落ID・原文ハッシュをモデルの応答と照合し、全文を生成させず局所置換だけを受け取ります。"
+                "置換IDと位置はプログラムが確定し、常体・敬体、時制・否定・モダリティ、引用・書名を検査します。"
+                "適合する置換を組み合わせ、不適合な置換だけを原文と対象段落付きで人間確認へ保存します。"
+                "三つの独立標本と変更なしの結果もSQLiteへ記録し、途中再開で二重生成しません。"
+            ),
+            "input": "文ID・元文ID・段落ID・原文ハッシュ、原文、文体条件",
+            "output": "文IDを保持した局所置換と候補ID、採用・保留の置換ID、原文対応の履歴",
+        },
+        "preprocess_proofreading_candidates": {
+            "purpose": "局所修正の原文対応と文体を検査",
+            "summary": (
+                "局所置換からの再構成を照合し、検査後の無記録な変更や文体変更を候補選択へ流しません。"
+            ),
+            "input": "原文ID・ハッシュ、候補、局所置換の保存記録",
+            "output": "対応と文体を検査した候補、または人間確認",
+        },
+        "rank_proofreading_candidates": {
+            "purpose": "原文と局所修正候補を比較して選択",
+            "summary": (
+                "Solは原文と検査済み候補を比較し、文IDごとに候補IDだけを選びます。"
+                "本文の書き直しは行いません。"
+            ),
+            "input": "文ID、原文、検査済み候補IDと本文",
+            "output": "文IDと選択候補ID、または原文維持",
+        },
+        "publish_proofreading_shadow": {
+            "purpose": "IDを保って検証済み局所修正を反映",
+            "summary": (
+                "適用直前に原文・局所置換履歴・ID対応を再検査します。保護されたインライン構造を平文化せず、"
+                "段落の属性・IDを保ちます。表層処理が記録外の変更を加えた段落は戻し、元Runの履歴は変更しません。"
+            ),
+            "input": "選択候補ID、元のHTML、文・段落ID、原文ハッシュ、局所置換履歴",
+            "output": "IDを維持した検証済みHTMLと適用・保留履歴",
+        },
+        "classify_audit_findings": {
+            "summary": (
+                "監査の主張ID・文IDは実際の節契約と初稿の所属から節へ対応づけます。"
+                "複数節に属する指摘は各節へ展開し、元の主張IDと修正対象の文IDを保持します。"
+                "所属不明の指摘を捨てず停止し、節の検査範囲と修復・人間確認の区別を維持します。"
+            ),
+            "input": "監査指摘、節契約、初稿の主張・文ID",
+            "output": "正しい対象節と原指摘を保つ監査分類",
+        },
         "render_evidence_footnotes": {
             "summary": (
                 "脚注の書誌不足は検査を維持して停止します。一次の出版社・図書館情報を確認した"
                 "運用者の書誌補正は、元の文献の同一性と厳格な書式検査を満たす場合だけ適用します。"
                 "元入力・確認元・補正内容を履歴に残し、停止した脚注工程を一度だけ再開します。"
+                "書名だけへの脚注は、単独・複数を問わず各書名の閉じ括弧『』の直前へ置きます。"
+                "本文改稿と再描画でもその位置と脚注ID・番号を保ちます。"
+                "参考文献用の書名抽出では脚注番号を除外し、番号付きの偽の書名を追加しません。"
+                "保存済みの脚注生成前入力から、別Runで後半だけを実行できます。"
+                "元Run・旧HTML・回答を保持し、新Runでは脚注以降の検証と提出保存をやり直します。"
                 "既定の2試行が同一入力・同一エラーなら、失敗履歴を残して最新試行だけを再開します。"
                 "人間の過剰要求判断とは別の経路で、本文・論証・主張の支持判定を変更しません。"
             ),
             "input": "保存済み入力、一次情報で確認した書誌、確認元URL",
             "output": "厳格に検査した脚注、元入力を含む補正履歴",
+        },
+        "redraft_body_prose": {
+            "summary": (
+                "一回の本文改稿と読者評価の後、確認不足・出典照合・理論適用の未検証を"
+                "本文から除き、段落IDと原文を付けて人間確認へ保存します。"
+                "元段落への差し戻し後にも検査するため、確認文を本文へ戻しません。"
+                "対象範囲・条件・否定・反証は命題として保ち、書名・引用・脚注を変更しません。"
+                "確認事項の抽出に失敗した場合は停止し、未処理の本文を完了扱いにしません。"
+                "その後、引用の有無を問わず節をまたぐ全段落境界を点検します。"
+                "中心語の引き継ぎと、付加・対比・理由などに合う接続表現を別々に判定します。"
+                "文中の『も』『だけでなく』だけでは段落間の付加を明示したと扱いません。"
+                "問題が残る次段落の冒頭文だけを一度修正し、全境界と意味保存を独立に再検査します。"
+                "保護部分と第二文以降は固定し、意味が変わる修正は採用せず、人間確認へ回します。"
+            ),
+            "input": "改稿・差し戻し後のHTML、保護対象、段落ごとの内容",
+            "output": "確認文を除いたHTML、全境界の中心語・接続表現の判定、修正前後、人間確認事項",
         },
         "human_approval": {
             "summary": (
@@ -46,6 +116,51 @@ def main() -> None:
             "output": "承認記録、または人間の回答を持つ新しい段落形成・修正・再レビュー",
         },
     }
+    for node_id in (
+        "build_claim_tree", "build_argument_graph", "select_defense_obligations",
+        "lock_section_contracts", "diagnose_japanese_prose", "redraft_japanese_paragraphs",
+        "review_japanese_sections", "redraft_body_prose", "audit_final_findings",
+    ):
+        original = data["review_policy"].get(node_id, {})
+        data["review_policy"][node_id] = {
+            **original,
+            "summary": original.get("summary", "") + (
+                "概念の意味・対象への適用根拠・論証での役割を独立に検査します。"
+                "必要な専門語を保持し、言い回しの問題と根拠のない前提を区別します。"
+                "上流の生成は最大2回修復し、その都度独立に再検査します。"
+                "不変の候補や前に拒否した候補への回帰は停止し、本文での前提の問題は上流修復へ返します。"
+                "必須語も妥当性を確認し、生成済み契約だけで概念を正当化しません。"
+                "原典の未確認だけで専門語を除去せず、必要な定義の説明は語を保って修復します。"
+                "本文から除いた確認不足の条件は、人間確認へ保存します。"
+                "内部の根拠カードでは確認範囲の記録を保ち、本文と役割を区別します。"
+                "根拠カード内の不適切な概念・誤った適用も検査対象です。"
+                "research_gapと採否理由も検査し、編集上の省略から標本代表性の義務や"
+                "新しい分析対象を作らないことを確認します。"
+                "引用された語は候補ごとに判定し、適切な専門概念の保持指定漏れを防ぎます。"
+                "引用符への出現だけで概念を適切・保持必須にはしません。"
+                "内部監査はreview_concept_fit_v32、GPT-5.6 Sol mediumです。"
+                "再開では完全一致する受理済み検査だけを再利用し、不正な応答を受理しません。"
+                  "提示済みのfinding_id・obligation_idも根拠IDとして照合し、未提示IDは拒否します。"
+                  "原典以外の外部根拠の未解決や掲載条件の未確定も、本文から除いた原文を人間確認へ保存します。"
+                  "全体の形式修正後も引用語が別フィールドへ混入する場合は、最大8フィールドを各1回だけ個別照合し、全体を再検証します。"
+                "根拠IDが不正な応答には、誤IDと使用可能IDを具体的に示して既定1回の形式修正を求め、意味の指摘は保持します。"
+                "修復前後の報告書を上書きせず、失敗履歴も保持します。"
+                "保存時のJSONキー順に依存しない単位IDの順で、検査と再開を照合します。"
+                "保存済みの根拠から別Runで論証以降を再生成でき、元Runの成果物を保持します。"
+            ),
+            "input": original.get("input", "") + " 原文の命題・出典、候補概念、節の文脈",
+            "output": original.get("output", "") + " 概念ごとの判定・保持語・修復前後・再検査記録",
+        }
+    data["review_policy"]["redraft_japanese_paragraphs"]["summary"] += (
+        "改稿候補が加えた根拠のない前提は採用せず、上流の段落生成へ指摘を戻します。"
+        "既存の節ごと最大3回の改稿枠を使い、元の主張・節契約を改変せず再生成します。"
+        "ID照合や提供先の形式エラーを意味修正へ読み替えません。"
+    )
+    data["review_policy"]["audit_final_findings"]["summary"] += (
+        "自動脚注番号を意味検査用の本文から除き、書名中の本来の数字は保持します。"
+        "HTMLと注の位置は変えず、固定済みHTMLの最終監査だけを別Runで再実行できます。"
+        "元Runの本文・監査・確認事項は履歴として保持します。"
+    )
     data["research_policy"] = {
         "plan_research_queries": {
             "summary": (
@@ -128,16 +243,112 @@ def main() -> None:
             "output": "再評価済みの根拠と未確認事項、bounded_research_retry_report",
         },
     }
+    target = TARGET
+    if contextual:
+        target = TARGET.with_name("manuscript-proofreading-high-data.js")
+        data["proofreading_profile"] = "llmjp33b_high"
+        descriptions = {
+            "diagnose_japanese_prose": (
+                "原文と校正文脈を固定",
+                "CPUで節・段落・文ID・原文ハッシュと前後段落を固定します。診断は次の修正生成と一体で行います。保護ブロックとインライン構造を自"
+                "動変更の対象から除きます。",
+            ),
+            "redraft_japanese_paragraphs": (
+                "節を読んで診断と局所修正を提案",
+                "LLM-jp-4.1 33B BF16 highが、対象文そのものと前後段落を読み、"
+                "一度だけ必要な局所修正を提案します。1文3候補"
+                "・Luna検査・Sol順位付けは使いません。専門語や頻度だけを理由に書き換えず、中心語・接続・文体・意味を保ちます。",
+            ),
+            "review_japanese_sections": (
+                "原文と候補を独立に読み採否を確認",
+                "別のLLM-jp 33B BF16 high呼出しで原文・候補段落・置換IDを照合し、"
+                "必要性・自然さ・意味・文体・前後関係を確認し"
+                "ます。確認側では再改稿せず、問題のある案は棄却または人間確認へ回します。",
+            ),
+            "japanese_surface_quality_gate": (
+                "原文と採否を照合して反映",
+                "CPUが原文ハッシュ・一意な置換元・範囲・受け身と使役・文体・書名・数値・保護HTMLを再検査し、独立確認を通過した置換だけ反映し"
+                "ます。未確認事項と保留は段落ID付きで人間確認へ送り、本文へ留保を追加しません。",
+            ),
+            "reconcile_candidate_context_after_proofreading": (
+                "校正後の対応情報と出典述語を確認",
+                "節・根拠・引用の対応をCPUで照合し、引用述語の帰属判定もLLM-jp 33B highで行います。"
+                "未確定・不整合を通過扱いにせず、指定した校正区間の最後まで検査します。",
+            ),
+        }
+        for node in data["nodes"]:
+            if node["id"] in descriptions:
+                purpose, summary = descriptions[node["id"]]
+                data["review_policy"][node["id"]] = {
+                    "purpose": purpose, "summary": summary,
+                    "input": "原文HTML、文・段落ID、ハッシュ、節と隣接段落、保存済みの修正案・採否",
+                    "output": "ID付き局所修正、独立した採否、原文対応の履歴と人間確認",
+                }
+                if node["resource_lane"] == "local_llm_gpu":
+                    node["inference"] = {"model": "LLM-jp-4.1 33B BF16", "effort": "high"}
+    if adoption:
+        target = TARGET.with_name("manuscript-proofreading-adopt-data.js")
+        data["proofreading_profile"] = profile
+        purposes = {
+            "diagnose_japanese_prose": (
+                "保存本文の引用とIDを固定し、節ごとの本文と隣接段落だけを校正入力にする"),
+            "redraft_japanese_paragraphs": (
+                "各節1回のLLM-jpで不自然な連語・語法の診断、理由、局所修正案を同時に取得する。"
+                "原稿全文の再送、未指摘段落の改稿、論証・構成・内容の追加をしない。"
+                "HF自動起動が有効なら未取得の節がある時だけGPUを起動し、校正区間の終了・"
+                "失敗・キャンセル時に停止する。取得済みの節はGPUなしで再利用し、"
+                "応答不明の節は再生成しない。料金・時間・起動ID・送信記録はSQLiteに保存する"),
+            "review_japanese_sections": (
+                "保存済み案の原文対応、重複範囲、固定引用、ID、括弧をアプリが検査する。"
+                "原文にない誤記の指摘は不適用として記録する。Sol mediumが内容変更・文の破損だけを"
+                "実際の変更箇所の引用と理由付きで照合する。保留は原案とともに人間確認へ残す。"
+                "LLM-jpへの再確認や別の言い換え探索をしない"),
+            "japanese_surface_quality_gate": (
+                "Lunaで生成時の既存表記規定だけを適用し、本文を旧稿へ戻さない"),
+            "reconcile_candidate_context_after_proofreading": (
+                "文ごとのevidence_usesから引用の実現先を復元する。節で利用可能な資料を"
+                "引用不要の結論に割り当てず、採用本文・固定DOM・引用IDを維持する"),
+            "redraft_body_prose": (
+                "採用案を保持し、確認不足を述べる留保を既存のCodex抽出で人間確認へ移す。"
+                "原文の完全一致削除だけを記録し、実質的な分析条件・引用・脚注・IDを保持する"),
+        }
+        for node in data["nodes"]:
+            if node["id"] in purposes:
+                data["review_policy"][node["id"]] = {
+                    "purpose": purposes[node["id"]], "summary": purposes[node["id"]],
+                    "input": "固定本文スロット・段落ID・引用支持関係・既存執筆規定",
+                    "output": "採用本文、表記整形、構造と出典対応の保存記録",
+                }
+                scoped_io = {
+                    "diagnose_japanese_prose": (
+                        "保存本文・段落ID・節構造・保護要素。モデルへの送信なし",
+                        "各節の本文と前後の段落、固定されたHTMLとID"),
+                    "redraft_japanese_paragraphs": (
+                        "その節の本文と段落ID、前後の段落だけ。各節1要求",
+                        "問題箇所のbefore/after・理由・人間確認事項。本文全体は返さない"),
+                    "review_japanese_sections": (
+                        "機械照合済みの局所案と対象段落を一度だけまとめてSolへ送る",
+                        "変更箇所と理由付きの採否、不適用記録、固定DOMの検査と採用本文"),
+                }
+                if node["id"] in scoped_io:
+                    source, result = scoped_io[node["id"]]
+                    data["review_policy"][node["id"]].update(input=source, output=result)
+                if node["resource_lane"] == "local_llm_gpu":
+                    node["inference"] = {"model": "LLM-jp-4.1 33B BF16", "effort": "high"}
+                elif node["id"] == "japanese_surface_quality_gate":
+                    node["inference"] = {"model": "gpt-6-luna", "effort": "low"}
+                elif node["id"] in {"review_japanese_sections", "redraft_body_prose"}:
+                    node["inference"] = {"model": "gpt-5.6-sol", "effort": "medium"}
     output = (
         "// Generated from the current executable manuscript workflow.\n"
         "// Do not edit by hand. Regenerate with scripts/generate_manuscript_graph.py.\n"
         f"window.MANUSCRIPT_GRAPH_V32 = {json.dumps(data, ensure_ascii=False, indent=2)};\n"
     )
     if "--check" in sys.argv:
-        if TARGET.read_text(encoding="utf-8") != output:
+        if target.read_text(encoding="utf-8") != output:
             raise SystemExit("V32 DAG data is stale")
     else:
-        TARGET.write_text(output, encoding="utf-8")
+        target.write_text(output, encoding="utf-8")
     print(
         f"{len(data['nodes'])} nodes, {len(data['edges'])} edges "
         f"(diagram V32, workflow V{data['version']})"

@@ -492,7 +492,9 @@ class EmbeddingResourceSampler:
 
     def __exit__(self, *_: Any) -> None:
         self._stop.set()
-        self._thread.join(timeout=self.interval_seconds + 2.0)
+        # GPU sampling and SQLite busy waits can outlast the sampling interval.
+        # Do not return while the sampler can still hold or reopen the database.
+        self._thread.join()
 
     @staticmethod
     def _gpu_sample() -> tuple[float, float, float]:
@@ -528,6 +530,8 @@ class EmbeddingResourceSampler:
             previous_cpu = sampled_cpu
             try:
                 gpu_percent, vram_used, vram_total = self._gpu_sample()
+                if self._stop.is_set():
+                    break
                 with self.connection_factory() as connection:
                     connection.execute(
                         """

@@ -9,6 +9,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections import Counter, defaultdict
+from dataclasses import replace
 from functools import partial
 from itertools import pairwise
 from typing import Any
@@ -17,6 +18,7 @@ from fukamiru.documents.japanese_style import JAPANESE_PROSE_GUIDANCE
 from fukamiru.documents.japanese_surface import JapaneseSurfaceQualityGate
 from fukamiru.errors import FukamiruError
 from fukamiru.revisions import ManuscriptDiscourseService
+from fukamiru.revisions import proofreading_local as local_rules
 from fukamiru.revisions import sentence_proofreading as rules
 from fukamiru.revisions.surface_warning import (
     EFFORT,
@@ -32,6 +34,7 @@ from fukamiru.storage.proofreading_generations import (
     generation_id,
 )
 from fukamiru.storage.runs import utc_now
+from fukamiru.worker import proofreading_local as local_worker
 
 PROMPT_VERSION = "llmjp-full-sentence-academic-v29.2-natural-prose"
 SYSTEM_PROMPT = (
@@ -63,11 +66,9 @@ SINGLE_GENERATION_SCHEMA_V31 = {
     "additionalProperties": False,
 }
 SINGLE_PROMPT_VERSION_V31 = "llmjp-three-independent-academic-edits-v31"
-SINGLE_SYSTEM_PROMPT_V31 = (
-    SYSTEM_PROMPT.replace(
-        "候補を3件返す。互いに異なる自然な日本語にし、",
-        "候補を1件返す。原文より自然になる場合にだけ書き換え、",
-    )
+SINGLE_SYSTEM_PROMPT_V31 = SYSTEM_PROMPT.replace(
+    "候補を3件返す。互いに異なる自然な日本語にし、",
+    "候補を1件返す。原文より自然になる場合にだけ書き換え、",
 )
 
 
@@ -119,15 +120,21 @@ def _log(
 
 def prepare_sentences(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
     original_html = str(context["proposed_html"])
-    generation = draft_generation_id(str(getattr(claimed, "workflow_name", "")),
-                                     str(getattr(claimed, "workflow_version", "")), context)
+    generation = draft_generation_id(
+        str(getattr(claimed, "workflow_name", "")),
+        str(getattr(claimed, "workflow_version", "")),
+        context,
+    )
     context = dict(context)
     if generation != LEGACY_GENERATION:
         context["_proofreading_generation_id"] = generation
     else:
         context.pop("_proofreading_generation_id", None)
-    sentence_scope = (claimed.run_id if generation == LEGACY_GENERATION else
-                      claimed.run_id + ":g:" + rules.digest(generation)[:16])
+    sentence_scope = (
+        claimed.run_id
+        if generation == LEGACY_GENERATION
+        else claimed.run_id + ":g:" + rules.digest(generation)[:16]
+    )
     sentences = rules.extract_sentences(
         original_html,
         run_id=sentence_scope,
@@ -144,22 +151,35 @@ def prepare_sentences(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
     with worker.databases.state.connect() as connection:
         checkpoint = connection.execute(
             "SELECT source_html_sha256 FROM manuscript_proofreading_generations "
-            "WHERE run_id=? AND generation_id=?", (claimed.run_id, generation),
+            "WHERE run_id=? AND generation_id=?",
+            (claimed.run_id, generation),
         ).fetchone()
         if checkpoint and checkpoint[0] != rules.digest(original_html):
             raise FukamiruError("proofreading.source_checkpoint_changed")
         existing = connection.execute(
             "SELECT id,original_hash FROM manuscript_proofreading_sentences "
-            "WHERE run_id=? AND generation_id=?", (claimed.run_id, generation),
+            "WHERE run_id=? AND generation_id=?",
+            (claimed.run_id, generation),
         ).fetchall()
         prior = {str(x["id"]): str(x["original_hash"]) for x in existing}
         if prior and prior != {x["id"]: x["original_hash"] for x in sentences}:
             raise FukamiruError("proofreading.source_checkpoint_changed")
+        old_candidates = connection.execute(
+            "SELECT 1 FROM manuscript_proofreading_patches WHERE run_id=? AND generation_id=? "
+            "AND generation_prompt_version<>? LIMIT 1",
+            (claimed.run_id, generation, local_rules.CONTRACT),
+        ).fetchone()
         connection.execute(
             "INSERT OR IGNORE INTO manuscript_proofreading_generations "
             "(run_id,generation_id,source_html_sha256,producer_node_run_id,created_at) "
-            "VALUES (?,?,?,?,?)", (claimed.run_id, generation, rules.digest(original_html),
-                                   claimed.node_run_id, utc_now()),
+            "VALUES (?,?,?,?,?)",
+            (
+                claimed.run_id,
+                generation,
+                rules.digest(original_html),
+                claimed.node_run_id,
+                utc_now(),
+            ),
         )
         for item in sentences:
             connection.execute(
@@ -211,12 +231,20 @@ def prepare_sentences(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
         "sentence_extraction_complete": True,
     }
     _event(worker, claimed, "manuscript.proofreading.sentences.completed", report)
+    local_enabled = (
+        str(getattr(claimed, "workflow_name", "")) == "manuscript_generator"
+        and str(getattr(claimed, "workflow_version", "")) == "32"
+        and not old_candidates
+    )
+    if not local_enabled:
+        context.pop("_proofreading_local_contract", None)
     return {
         **context,
+        **({"_proofreading_local_contract": local_rules.CONTRACT} if local_enabled else {}),
         "pre_polish_html": original_html,
         "manuscript_proofreading_targets": report,
         "manuscript_proofreading_versions": {
-            "generation_prompt_version": PROMPT_VERSION,
+            "generation_prompt_version": local_rules.CONTRACT if local_enabled else PROMPT_VERSION,
             "numeric_rule_version": rules.NUMERIC_VERSION,
             "attribution_rule_version": rules.ATTRIBUTION_VERSION,
             "title_registry_version": rules.TITLE_VERSION,
@@ -250,9 +278,7 @@ def _request_generation(adapter: Any, original: str, seed: int, max_tokens: int)
     return candidates
 
 
-def _request_generation_v31(
-    adapter: Any, original: str, seed: int, max_tokens: int
-) -> str:
+def _request_generation_v31(adapter: Any, original: str, seed: int, max_tokens: int) -> str:
     response = adapter.complete_json(
         system_prompt=SINGLE_SYSTEM_PROMPT_V31,
         user_prompt="原文:\n" + original,
@@ -271,6 +297,8 @@ def _request_generation_v31(
 
 
 def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
+    if local_worker.enabled(context):
+        return local_worker.generate(worker, claimed, context)
     if not context.get("use_llm_jp"):
         return {
             **context,
@@ -289,7 +317,10 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
                 "SELECT * FROM manuscript_proofreading_sentences "
                 "WHERE run_id=? AND generation_id=? AND status!='segmentation_superseded' "
                 "ORDER BY block_id,sentence_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
     v31 = context.get("research_problem") is not None
@@ -321,15 +352,17 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
                     actual_seed = seed + attempt
                     stats["generation_call_count"] += 1
                     try:
-                        generated.append((
-                            _request_generation_v31(
-                                worker.llm_jp,
-                                sentence["original_text"],
+                        generated.append(
+                            (
+                                _request_generation_v31(
+                                    worker.llm_jp,
+                                    sentence["original_text"],
+                                    actual_seed,
+                                    worker.settings.translation.manuscript_polish_max_output_tokens,
+                                ),
                                 actual_seed,
-                                worker.settings.translation.manuscript_polish_max_output_tokens,
-                            ),
-                            actual_seed,
-                        ))
+                            )
+                        )
                     except Exception as exc:  # noqa: BLE001 - record each failed sample
                         error = f"{type(exc).__name__}:{exc}"
                         stats["generation_call_error_count"] += 1
@@ -464,13 +497,19 @@ def generate_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> d
 
 
 def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
+    review_items = {
+        item["review_item_id"]: item for item in context.get("human_review_items") or []
+    }
     with worker.databases.state.connect() as connection:
         registry = {
             str(x["title"]): json.loads(x["evidence_json"])
             for x in connection.execute(
                 "SELECT title,evidence_json FROM manuscript_proofreading_title_registry "
                 "WHERE run_id=? AND generation_id=?",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         }
         patches = [
@@ -480,7 +519,10 @@ def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, 
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
                 "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
     counts = Counter()
@@ -504,6 +546,28 @@ def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, 
         )
         candidate = result.get("normalized_candidate_text", patch["raw_candidate_text"])
         with worker.databases.state.connect() as connection:
+            if local_worker.enabled(context):
+                local_issues = local_worker.candidate_issues(connection, patch, candidate)
+                if local_issues:
+                    result["status"] = "manual_check"
+                    result["status_reasons"] = list(
+                        dict.fromkeys([*result["status_reasons"], *local_issues])
+                    )
+                    source = connection.execute(
+                        "SELECT * FROM manuscript_proofreading_sentences WHERE id=?",
+                        (patch["sentence_id"],),
+                    ).fetchone()
+                    if source is not None:
+                        item = local_worker.application_review(
+                            context, dict(source),
+                            {**patch, "normalized_candidate_text": candidate}, local_issues,
+                        )
+                        review_items[item["review_item_id"]] = item
+                    # Retain the recorded candidate and its ID, even when normalization
+                    # suggests a different text. Otherwise UNIQUE(sentence_id,text)
+                    # could merge it into another candidate and discard its audit.
+                    candidate = patch["raw_candidate_text"]
+                    result["candidate_hash"] = rules.digest(candidate)
             duplicate = connection.execute(
                 "SELECT id,frequency,generation_seeds_json FROM manuscript_proofreading_patches "
                 "WHERE sentence_id=? AND normalized_candidate_text=? AND id<>?",
@@ -579,7 +643,10 @@ def preprocess(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, 
         "base_likelihood_used_for_selection": False,
     }
     _event(worker, claimed, "manuscript.proofreading.preprocess.completed", report)
-    return {**context, "manuscript_proofreading_preprocess": report}
+    return {
+        **context, "human_review_items": list(review_items.values()),
+        "manuscript_proofreading_preprocess": report,
+    }
 
 
 def evaluate_luna(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
@@ -591,7 +658,10 @@ def evaluate_luna(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[st
                 "SELECT * FROM manuscript_proofreading_patches WHERE run_id=? AND generation_id=? "
                 "AND status IN ('luna_pending','luna_unavailable') "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
     by_key: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -682,9 +752,7 @@ def evaluate_luna(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[st
             record_attempt=record_attempt,
             concurrency=concurrency,
             batch_size=batch_size,
-            observation_callback=partial(
-                worker._record_llm_observation, claimed
-            ),
+            observation_callback=partial(worker._record_llm_observation, claimed),
         )
         if items and external_send_authorized
         else ([], [item["id"] for item in items])
@@ -812,7 +880,10 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
                 "SELECT * FROM manuscript_proofreading_sentences "
                 "WHERE run_id=? AND generation_id=? "
                 "AND status!='segmentation_superseded' ORDER BY block_id,sentence_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
         patches = [
@@ -822,7 +893,10 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
                 "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY p.sentence_id,p.candidate_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
     clean_by_sentence: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -864,9 +938,14 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
         )
 
     batches = [records[index : index + 20] for index in range(0, len(records), 20)]
+    selection_stage = (
+        "proofreading_local_selection_v32"
+        if local_worker.enabled(context)
+        else "proofreading_selection"
+    )
     results = worker._authoring_parallel_generate(
         claimed,
-        stage="proofreading_selection",
+        stage=selection_stage,
         payloads=[{"sentences": batch} for batch in batches],
         operation_name="proofreading-selection-v30",
     )
@@ -889,14 +968,9 @@ def rank_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[
         for sentence_id, decision in decisions.items():
             confidence = str(decision.get("confidence") or "low")
             selected_id = str(decision.get("selected_candidate_id") or "ORIGINAL")
-            allowed_ids = {
-                str(item["candidate_id"])
-                for item in by_id[sentence_id]["candidates"]
-            }
+            allowed_ids = {str(item["candidate_id"]) for item in by_id[sentence_id]["candidates"]}
             if selected_id != "ORIGINAL" and selected_id not in allowed_ids:
-                raise FukamiruError(
-                    "proofreading.selection_candidate_id_invalid:" + sentence_id
-                )
+                raise FukamiruError("proofreading.selection_candidate_id_invalid:" + sentence_id)
             if selected_id != "ORIGINAL" and confidence == "high":
                 auto_selected[sentence_id] = selected_id
                 status = "auto_selected"
@@ -952,7 +1026,10 @@ def select_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
                 "WHERE p.run_id=? AND p.generation_id=? AND s.status!='segmentation_superseded' "
                 "ORDER BY sentence_id,candidate_ordinal",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
     by_sentence: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -966,8 +1043,7 @@ def select_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
     if not isinstance(ranked, dict):
         raise FukamiruError("proofreading.ranked_selection_map_must_be_structured")
     retained_originals = {
-        str(item)
-        for item in context.get("_proofreading_ranked_original_sentence_ids") or []
+        str(item) for item in context.get("_proofreading_ranked_original_sentence_ids") or []
     }
     selected_count = 0
     auto_selected_ids: list[str] = []
@@ -975,16 +1051,12 @@ def select_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
     selection_modes: Counter[str] = Counter()
     with worker.databases.state.connect() as connection:
         for sentence_id, siblings in by_sentence.items():
-            clean = [
-                x for x in siblings if x["status"] == "clean" and x["apply_allowed"]
-            ]
+            clean = [x for x in siblings if x["status"] == "clean" and x["apply_allowed"]]
             selected_id = str(explicit.get(sentence_id) or "")
             choice = next((x for x in clean if x["id"] == selected_id), None)
             mode = "explicit_selection" if choice else "waiting_selection"
             if selected_id and choice is None:
-                raise FukamiruError(
-                    "proofreading.selected_candidate_not_clean:" + sentence_id
-                )
+                raise FukamiruError("proofreading.selected_candidate_not_clean:" + sentence_id)
             if choice is None and sentence_id in ranked:
                 ranked_id = str(ranked[sentence_id])
                 choice = next(
@@ -996,9 +1068,7 @@ def select_candidates(worker: Any, claimed: Any, context: dict[str, Any]) -> dic
                     None,
                 )
                 if choice is None:
-                    raise FukamiruError(
-                        "proofreading.ranked_candidate_not_clean:" + sentence_id
-                    )
+                    raise FukamiruError("proofreading.ranked_candidate_not_clean:" + sentence_id)
                 mode = "sol_high_confidence_auto"
             if choice is None and auto_unique and len(clean) == 1:
                 choice = clean[0]
@@ -1061,9 +1131,7 @@ def _apply_selected_previews(canonical_html: str, previews: dict[str, str]) -> s
         return canonical_html
     root = ET.fromstring(canonical_html)
     blocks = {
-        str(element.attrib["id"]): element
-        for element in root.iter("p")
-        if "id" in element.attrib
+        str(element.attrib["id"]): element for element in root.iter("p") if "id" in element.attrib
     }
     missing = sorted(set(previews) - set(blocks))
     if missing:
@@ -1096,9 +1164,7 @@ def _locked_selected_patch_ids(
                 offset = block_text.find(locked_text, start)
                 if offset < 0:
                     break
-                locked_spans[block_id].append(
-                    (offset, offset + len(locked_text))
-                )
+                locked_spans[block_id].append((offset, offset + len(locked_text)))
                 start = offset + max(1, len(locked_text))
     protected: set[str] = set()
     for patch in selected:
@@ -1111,23 +1177,24 @@ def _locked_selected_patch_ids(
         end_offset = int(source.get("end_offset") or 0)
         if any(
             start_offset < locked_end and end_offset > locked_start
-            for locked_start, locked_end in locked_spans.get(
-                str(source.get("block_id") or ""), []
-            )
+            for locked_start, locked_end in locked_spans.get(str(source.get("block_id") or ""), [])
         ):
             protected.add(str(patch["id"]))
     return protected
 
 
 def _introduces_reader_facing_scaffold(
-    worker: Any, block_id: str, original_text: str, candidate_text: str,
+    worker: Any,
+    block_id: str,
+    original_text: str,
+    candidate_text: str,
 ) -> bool:
-    original = worker._authoring_reader_facing_v31_findings([
-        {"section_id": block_id, "text": original_text}
-    ])
-    candidate = worker._authoring_reader_facing_v31_findings([
-        {"section_id": block_id, "text": candidate_text}
-    ])
+    original = worker._authoring_reader_facing_v31_findings(
+        [{"section_id": block_id, "text": original_text}]
+    )
+    candidate = worker._authoring_reader_facing_v31_findings(
+        [{"section_id": block_id, "text": candidate_text}]
+    )
     original_messages = {item["message"] for item in original}
     return any(item["message"] not in original_messages for item in candidate)
 
@@ -1144,7 +1211,10 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                 "SELECT * FROM manuscript_proofreading_sentences "
                 "WHERE run_id=? AND generation_id=? "
                 "AND status!='segmentation_superseded'",
-                (claimed.run_id, generation_id(context),),
+                (
+                    claimed.run_id,
+                    generation_id(context),
+                ),
             )
         ]
         patches = [
@@ -1207,14 +1277,52 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                 )
     status_counts = Counter(x["status"] for x in active_patches)
     selected = [x for x in active_patches if x["selected"]]
+    local_review_items = {
+        item["review_item_id"]: item for item in context.get("human_review_items") or []
+    }
+    local_rejected_ids: set[str] = set()
+    if local_worker.enabled(context):
+        source_elements = {
+            element.get("id"): element for element in ET.fromstring(normalized_html).iter("p")
+        }
+        with worker.databases.state.connect() as connection:
+            for patch in selected:
+                source = sentence_by_id[patch["sentence_id"]]
+                element = source_elements.get(source["block_id"])
+                issues = local_worker.candidate_issues(
+                    connection, patch, patch["normalized_candidate_text"]
+                )
+                if element is None or len(element):
+                    issues.append("protected_inline_structure")
+                if not issues:
+                    continue
+                local_rejected_ids.add(str(patch["id"]))
+                item = local_worker.application_review(context, source, patch, issues)
+                local_review_items[item["review_item_id"]] = item
+                connection.execute(
+                    "UPDATE manuscript_proofreading_patches SET status='manual_check',"
+                    "status_reasons_json=?,apply_allowed=0,selected=0,applied=0 WHERE id=?",
+                    (_json(sorted(set(issues))), patch["id"]),
+                )
+                patch.update(status="manual_check", apply_allowed=0, selected=0, applied=0)
+                _log(
+                    connection,
+                    claimed,
+                    stage="local_edit_application",
+                    status="manual_check",
+                    version=local_rules.CONTRACT,
+                    patch_id=patch["id"],
+                    sentence_id=source["id"],
+                    reason=";".join(issues),
+                    payload={"block_id": source["block_id"]},
+                )
+        selected = [patch for patch in selected if str(patch["id"]) not in local_rejected_ids]
     locked_selected_ids = _locked_selected_patch_ids(
         selected=selected,
         sentence_by_id=sentence_by_id,
         source_block_text=source_block_text,
         locked_texts=[
-            str(value)
-            for value in context.get("_proofreading_locked_texts") or []
-            if str(value)
+            str(value) for value in context.get("_proofreading_locked_texts") or [] if str(value)
         ],
     )
     if locked_selected_ids:
@@ -1240,21 +1348,17 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                     reason="locked_authoring_contract_text",
                     patch_id=patch["id"],
                     sentence_id=patch["sentence_id"],
-                    payload={
-                        "block_id": sentence_by_id[patch["sentence_id"]]["block_id"]
-                    },
+                    payload={"block_id": sentence_by_id[patch["sentence_id"]]["block_id"]},
                 )
-        selected = [
-            patch
-            for patch in selected
-            if str(patch["id"]) not in locked_selected_ids
-        ]
+        selected = [patch for patch in selected if str(patch["id"]) not in locked_selected_ids]
     reader_facing_rejected_ids: set[str] = set()
     if str(getattr(claimed, "workflow_version", "")) in {"31", "32"}:
         for patch in selected:
             source = sentence_by_id[patch["sentence_id"]]
             if _introduces_reader_facing_scaffold(
-                worker, source["block_id"], source["original_text"],
+                worker,
+                source["block_id"],
+                source["original_text"],
                 patch["normalized_candidate_text"],
             ):
                 reader_facing_rejected_ids.add(str(patch["id"]))
@@ -1265,26 +1369,31 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                     "updated_at=? WHERE run_id=? AND generation_id=? AND id IN ({})".format(
                         ",".join("?" for _ in reader_facing_rejected_ids)
                     ),
-                    (utc_now(), claimed.run_id, generation_id(context),
-                     *sorted(reader_facing_rejected_ids)),
+                    (
+                        utc_now(),
+                        claimed.run_id,
+                        generation_id(context),
+                        *sorted(reader_facing_rejected_ids),
+                    ),
                 )
                 for patch in selected:
                     if str(patch["id"]) not in reader_facing_rejected_ids:
                         continue
                     _log(
-                        connection, claimed, stage="application", status="rejected",
+                        connection,
+                        claimed,
+                        stage="application",
+                        status="rejected",
                         version=rules.CONTRACT,
                         reason="reader_facing_scaffold_introduced",
-                        patch_id=patch["id"], sentence_id=patch["sentence_id"],
+                        patch_id=patch["id"],
+                        sentence_id=patch["sentence_id"],
                         payload={"block_id": sentence_by_id[patch["sentence_id"]]["block_id"]},
                     )
             selected = [
-                patch for patch in selected
-                if str(patch["id"]) not in reader_facing_rejected_ids
+                patch for patch in selected if str(patch["id"]) not in reader_facing_rejected_ids
             ]
-    previewable = [
-        x for x in active_patches if x["status"] == "clean" and x["apply_allowed"]
-    ]
+    previewable = [x for x in active_patches if x["status"] == "clean" and x["apply_allowed"]]
     preview_by_block: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for patch in previewable:
         source = sentence_by_id[patch["sentence_id"]]
@@ -1322,21 +1431,55 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
             )
         selected_preview_text[block_id] = preview_text
     selected_candidate_html = _apply_selected_previews(normalized_html, selected_preview_text)
-    gate = JapaneseSurfaceQualityGate.guard_canonical_html(
-        normalized_html, selected_candidate_html
-    )
-    reverted_selected_blocks = {
-        str(item.get("block_id") or "") for item in gate.reverted_blocks
-    }
+    gate = JapaneseSurfaceQualityGate.guard_canonical_html(normalized_html, selected_candidate_html)
+    if local_worker.enabled(context):
+        # A surface normalizer is not allowed to add unrecorded edits afterwards.
+        import copy
+
+        guarded_root = ET.fromstring(gate.canonical_html)
+        originals = {p.get("id"): p for p in ET.fromstring(normalized_html).iter("p")}
+        unrecorded_blocks = {
+            p.get("id")
+            for p in guarded_root.iter("p")
+            if p.get("id") in selected_preview_text
+            and "".join(p.itertext()) != selected_preview_text[p.get("id")]
+        }
+        if unrecorded_blocks:
+            for parent in guarded_root.iter():
+                for index, child in enumerate(list(parent)):
+                    if child.get("id") in unrecorded_blocks:
+                        parent.remove(child)
+                        parent.insert(index, copy.deepcopy(originals[child.get("id")]))
+            gate = replace(
+                gate,
+                canonical_html=ET.tostring(
+                    guarded_root, encoding="unicode", short_empty_elements=False
+                ),
+                reverted_blocks=(
+                    *gate.reverted_blocks,
+                    *(
+                        {"block_id": block_id, "issues": [{"code": "unrecorded_local_postprocess"}]}
+                        for block_id in sorted(unrecorded_blocks)
+                    ),
+                ),
+            )
+    reverted_selected_blocks = {str(item.get("block_id") or "") for item in gate.reverted_blocks}
     applied = [
         patch
         for patch in selected
         if sentence_by_id[patch["sentence_id"]]["block_id"] not in reverted_selected_blocks
     ]
     applied_ids = {str(patch["id"]) for patch in applied}
+    if local_worker.enabled(context):
+        for patch in selected:
+            if str(patch["id"]) not in applied_ids:
+                item = local_worker.application_review(
+                    context, sentence_by_id[patch["sentence_id"]], patch,
+                    ["surface_quality_gate_reverted_block"],
+                )
+                local_review_items[item["review_item_id"]] = item
     auto_selected_ids = {
-        str(value)
-        for value in context.get("_proofreading_auto_selected_candidate_ids") or []
+        str(value) for value in context.get("_proofreading_auto_selected_candidate_ids") or []
     }
     auto_applied_count = len(applied_ids.intersection(auto_selected_ids))
     if selected:
@@ -1360,9 +1503,7 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                     reason="" if was_applied else "surface_quality_gate_reverted_block",
                     patch_id=patch["id"],
                     sentence_id=patch["sentence_id"],
-                    payload={
-                        "block_id": sentence_by_id[patch["sentence_id"]]["block_id"]
-                    },
+                    payload={"block_id": sentence_by_id[patch["sentence_id"]]["block_id"]},
                 )
     remaining = list(JapaneseSurfaceQualityGate.find_canonical_html(gate.canonical_html))
     surface = gate.as_dict()
@@ -1381,7 +1522,9 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
     inventory = [worker._manuscript_predicate_inventory_record(x) for x in predicates]
     generation_error_count = sum(x["status"] == "processing_error" for x in sentences)
     report = {
-        "policy": "production-shadow-full-sentence-v29.1",
+        "policy": local_rules.CONTRACT
+        if local_worker.enabled(context)
+        else "production-shadow-full-sentence-v29.1",
         "sentence_count": len(sentences),
         "candidate_count": len(patches),
         "active_candidate_count": len(active_patches),
@@ -1392,6 +1535,7 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
         "applied_count": len(applied),
         "locked_contract_rejection_count": len(locked_selected_ids),
         "reader_facing_rejection_count": len(reader_facing_rejected_ids),
+        "local_contract_rejection_count": len(local_rejected_ids),
         "previewable_candidate_count": len(previewable),
         "preview_block_count": len(
             {sentence_by_id[x["sentence_id"]]["block_id"] for x in previewable}
@@ -1407,6 +1551,7 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
     return {
         **context,
         "pre_proofreading_html": normalized_html,
+        "human_review_items": list(local_review_items.values()),
         "proposed_html": gate.canonical_html,
         "manuscript_proofreading_shadow": report,
         "manuscript_proofreading_preview": dict(preview_by_block),
@@ -1419,7 +1564,8 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
         "manuscript_polish": {
             "enabled": True,
             "policy": rules.CONTRACT,
-            "mode": "production_shadow_full_sentence",
+            "mode": "source_addressed_local_edits"
+            if local_worker.enabled(context) else "production_shadow_full_sentence",
             "auto_applied_count": auto_applied_count,
             "zero_rejection_required": True,
             "rejection_rate": 0.0,
@@ -1435,9 +1581,7 @@ def publish_shadow(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[s
                 {
                     "block_id": block_id,
                     "status": (
-                        "original_preserved"
-                        if block_id in reverted_selected_blocks
-                        else "applied"
+                        "original_preserved" if block_id in reverted_selected_blocks else "applied"
                     ),
                     "patch_ids": [
                         str(patch["id"])

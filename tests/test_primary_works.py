@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from xml.etree import ElementTree as ET
 
+import pytest
+
 from fukamiru.authoring.codex import STAGE_GUIDANCE
 from fukamiru.authoring.primary_works import (
     append_primary_work_rows,
@@ -10,6 +12,7 @@ from fukamiru.authoring.primary_works import (
     candidate_titles,
     mentioned_creative_works,
     quoted_titles,
+    titles_in_argument_prose,
 )
 from fukamiru.worker.runner import WorkerRunner
 
@@ -104,3 +107,37 @@ def test_writer_handoff_exposes_progression_without_full_roadmap():
     assert "roadmap" not in intro
     assert "primary_work_cards" in STAGE_GUIDANCE["draft_body_v31"]
     assert "table of contents" in STAGE_GUIDANCE["draft_introduction_v31"]
+
+
+@pytest.mark.parametrize("generated", [False, True])
+def test_book_title_notes_never_become_creative_work_titles_or_bibliography_rows(generated):
+    attribute = ' data-citation-generated="evidence-footnote-v1"' if generated else ""
+    source = (
+        '<article id="D"><section id="S"><h2 id="H">本文</h2><p id="P">'
+        '<cite data-reference-id="R1">『<em>架空の協働研究</em>'
+        f'<sup{attribute}><a role="doc-noteref" href="#N">6</a></sup>』</cite>と'
+        '<cite data-reference-id="R2">『架空の記録論 : 観測と共同作業の条件'
+        f'<sup{attribute}><a role="doc-noteref" href="#M">5</a></sup>』</cite>を参照し、'
+        f'『架空作品2<sup{attribute}><a role="doc-noteref" href="#K">12</a></sup>』を分析する。'
+        '『作品<sup>2</sup>』も扱う。</p></section>'
+        '<section id="R" data-reference-section="generated"><h2 id="RH">参考文献</h2>'
+        '<p id="RP">『参考文献だけの書名』</p></section></article>'
+    )
+    titles = titles_in_argument_prose(source)
+    assert titles == [
+        "架空の協働研究", "架空の記録論 : 観測と共同作業の条件", "架空作品2", "作品2",
+    ]
+    cards = build_work_cards({
+        "semantic_paragraph_plan": [{"section_id": "S", "paragraphs": [{
+            "text": "と".join(f"『{title}』" for title in titles),
+        }]}],
+        "reference_entries": [{"title": title} for title in titles[:2]],
+    })
+    assert [card["title"] for card in cards] == ["架空作品2", "作品2"]
+    used = mentioned_creative_works(source, [*cards, {
+        "title": "架空の協働研究6", "kind": "creative_work",
+    }])
+    assert [card["title"] for card in used] == ["架空作品2", "作品2"]
+    rendered, _ = append_primary_work_rows(source, used)
+    assert [p.get("data-primary-work-title") for p in ET.fromstring(rendered).iter("p")
+            if p.get("data-primary-work-title")] == ["架空作品2", "作品2"]

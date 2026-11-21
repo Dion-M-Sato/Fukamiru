@@ -51,11 +51,15 @@ class LlamaServerAdapter:
         self._state = "stopped" if self.configured else "not_configured"
         self._last_error: str | None = None
         self._owned = False
+        self._last_completion_metadata: dict[str, Any] = {}
+        self._completion_local = threading.local()
         self._token_cache: dict[tuple[str, bool], tuple[tuple[int, str], ...]] = {}
         self._detokenize_cache: dict[tuple[int, ...], str] = {}
 
     @property
     def configured(self) -> bool:
+        if self.settings.endpoint:
+            return True
         return bool(
             self.settings.path
             and self.settings.path.is_file()
@@ -63,12 +67,24 @@ class LlamaServerAdapter:
         )
 
     @property
+    def last_completion_metadata(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(getattr(self._completion_local, "metadata", self._last_completion_metadata))
+
+    @property
     def base_url(self) -> str:
+        if self.settings.endpoint:
+            return self.settings.endpoint.rstrip("/").removesuffix("/v1")
         host = "127.0.0.1" if self.settings.host == "localhost" else self.settings.host
         return f"http://{host}:{self.settings.port}"
 
     @property
     def model_identity(self) -> str:
+        if self.settings.endpoint:
+            return hashlib.sha256(json.dumps([
+                self.model_name, self.base_url, self.settings.reasoning_effort,
+                self.settings.context_size, "remote-llama-v1",
+            ]).encode()).hexdigest()
         if self.settings.path is None or not self.settings.path.is_file():
             return f"{self.model_name}:not-configured"
         stat = self.settings.path.stat()
@@ -112,6 +128,11 @@ class LlamaServerAdapter:
                 raise FukamiruError(
                     f"{self.model_name} is not configured with an existing model and llama-server"
                 )
+            if self.settings.endpoint:
+                if not self._health(timeout=3.0):
+                    raise FukamiruError(f"{self.model_name} configured endpoint is unavailable")
+                self._state = "ready"
+                return
             if self._health(timeout=0.5):
                 self._state = "ready"
                 return
@@ -145,6 +166,8 @@ class LlamaServerAdapter:
                 command.extend(["--threads-http", str(self.settings.http_threads)])
             if not self.settings.webui:
                 command.append("--no-webui")
+            if self.settings.reasoning_effort:
+                command.append("--jinja")
             creation_flags = (
                 int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
             )
@@ -199,6 +222,7 @@ class LlamaServerAdapter:
         top_k: int | None = None,
         repeat_penalty: float | None = None,
         seed: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         self.ensure_started()
         body = {
@@ -213,7 +237,7 @@ class LlamaServerAdapter:
                 {
                     "type": "json_schema",
                     "json_schema": {
-                        "name": f"{self.model_name}-response",
+                        "name": f"{self.model_name.replace('.', '_')}-response",
                         "strict": True,
                         "schema": json_schema,
                     },
@@ -230,6 +254,9 @@ class LlamaServerAdapter:
             body["repeat_penalty"] = repeat_penalty
         if seed is not None:
             body["seed"] = seed
+        effort = reasoning_effort or self.settings.reasoning_effort
+        if effort:
+            body["reasoning_effort"] = effort
         with self._lock:
             self._state = "busy"
         try:
@@ -253,9 +280,23 @@ class LlamaServerAdapter:
                 usage = response.get("usage") or {}
                 completion_tokens = int(usage.get("completion_tokens") or 0)
                 requested_tokens = int(body["max_tokens"])
+                with self._lock:
+                    self._last_completion_metadata = {
+                        "model": self.model_name, "reasoning_effort": effort or None,
+                        "finish_reason": finish_reason, "usage": usage,
+                        "max_output_tokens": requested_tokens,
+                        "reasoning_characters": len(
+                            choice["message"].get("reasoning_content") or ""
+                        ),
+                    }
+                    self._completion_local.metadata = dict(self._last_completion_metadata)
                 truncated = finish_reason in {"length", "max_tokens"} or (
                     completion_tokens >= requested_tokens > 0
                 )
+                if effort and finish_reason != "stop":
+                    raise NonRetryableFukamiruError(
+                        f"{self.model_name} thinking completion did not finish: {finish_reason}"
+                    )
                 try:
                     parsed = json.loads(content)
                 except json.JSONDecodeError as exc:
@@ -518,20 +559,52 @@ class LlamaServerAdapter:
 
     def _health(self, *, timeout: float) -> bool:
         try:
-            request = urllib.request.Request(f"{self.base_url}/health", method="GET")
+            request = urllib.request.Request(
+                f"{self.base_url}/health", headers=self._headers(), method="GET"
+            )
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return 200 <= response.status < 300
         except (OSError, urllib.error.URLError):
             return False
 
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.settings.auth_token_env:
+            value = os.environ.get(self.settings.auth_token_env)
+            if not value:
+                raise NonRetryableFukamiruError(
+                    "Configured model authentication environment is missing"
+                )
+            headers["Authorization"] = "Bearer " + value
+        return headers
+
+    def verify_contextual_proofreading_backend(self) -> dict[str, Any]:
+        from fukamiru.revisions.proofreading_context import EFFORT, MODEL
+
+        self.ensure_started()
+        props = self._request_json("/props", None, timeout=30)
+        loaded = str(props.get("model_path") or "").replace("\\", "/").split("/")[-1]
+        context = int(dict(props.get("default_generation_settings") or {}).get("n_ctx") or 0)
+        rendered = self._request_json("/apply-template", {
+            "messages": [{"role": "user", "content": "設定確認"}], "reasoning_effort": EFFORT,
+        }, timeout=30).get("prompt", "")
+        if loaded != MODEL + ".gguf" or context < 65536 or "Reasoning: high" not in rendered:
+            raise NonRetryableFukamiruError(
+                "proofreading.requires_verified_llmjp41_33b_bf16_high_backend"
+            )
+        return {"model": MODEL, "reasoning_effort": EFFORT, "slot_context": context,
+                "build_info": props.get("build_info"), "loaded_model": loaded}
+
     def _request_json(
-        self, path: str, payload: dict[str, Any], *, timeout: float
+        self, path: str, payload: dict[str, Any] | None, *, timeout: float
     ) -> dict[str, Any]:
         request = urllib.request.Request(
             f"{self.base_url}{path}",
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            if payload is not None
+            else None,
+            headers=self._headers(),
+            method="POST" if payload is not None else "GET",
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from fukamiru import __version__
+from fukamiru.authoring.codex import CodexAuthoringAdapter
 from fukamiru.authoring.decision_ledger import build_decision_ledger
 from fukamiru.authoring.folder_input import FolderNoteService
 from fukamiru.authoring.policy import enforce_authoring_quality_policy
@@ -33,6 +34,9 @@ from fukamiru.evaluation import EvaluationService, RepairService
 from fukamiru.knowledge.bibliography import source_bibliography
 from fukamiru.knowledge.corpus import CorpusSyncService
 from fukamiru.knowledge.page_reading import POLICY as PAGE_READING_POLICY
+from fukamiru.knowledge.report_research import research_report
+from fukamiru.knowledge.report_sources import ReportCorpus
+from fukamiru.knowledge.search_reports import SearchReportRepository, export_document
 from fukamiru.knowledge.semantic import FaissSemanticIndex
 from fukamiru.knowledge.service import KnowledgeSearchService, preflight_embedding_tokenizer
 from fukamiru.literature import LiteratureDiscoveryService, OAAcquisitionService
@@ -163,6 +167,13 @@ class ProjectPathRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     root_path: str = Field(min_length=1)
+
+
+class SearchReportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=1000, pattern=r"\S")
+    limit: int = Field(default=100, ge=1, le=100)
 
 
 class ResolveReviewRequest(BaseModel):
@@ -411,14 +422,15 @@ class AssignOCRLanguageRequest(BaseModel):
     language: Literal["ja", "en", "fr", "ru", "zh", "ko", "de"]
 
 
-def _workflow_registry() -> dict[str, WorkflowDefinition]:
+def _workflow_registry(settings: Settings | None = None) -> dict[str, WorkflowDefinition]:
     definitions = (
         corpus_sync_workflow(),
         ingestion_workflow(),
         research_source_ingestion_workflow(),
         manuscript_rewrite_workflow(),
         translation_workflow(),
-        authoring_workflow(),
+        authoring_workflow(proofreading_profile=(settings.translation.japanese_proofreading_profile
+                                                if settings else "local_v32")),
     )
     return {definition.name: definition for definition in definitions}
 
@@ -458,7 +470,7 @@ def _sync_required_frame(run_id: str, oldest: int, newest: int) -> str:
 
 def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastAPI:
     databases = DatabasePair.from_settings(settings)
-    workflows = _workflow_registry()
+    workflows = _workflow_registry(settings)
     gpu_mutex = GpuMutex()
     semantic_index = FaissSemanticIndex(databases.knowledge.connect, settings, gpu_mutex=gpu_mutex)
     llm_jp = LlamaServerAdapter(
@@ -476,6 +488,17 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         runtime_root=settings.paths.runtime_root,
         model_name="llm-jp-4-8b-base-Q4_K_M",
     )
+    from fukamiru.config import ModelSettings
+    from fukamiru.revisions.proofreading_context import MODEL as proofreading_model
+
+    llm_jp_proofreading = LlamaServerAdapter(
+        settings.llm_jp_proofreading or ModelSettings(path=None, server_command="llama-server"),
+        runtime_root=settings.paths.runtime_root, model_name=proofreading_model,
+    )
+    if settings.hf_proofreading.enabled:
+        from fukamiru.local_llm.hf_jobs import HFProofreadingBackend
+
+        llm_jp_proofreading = HFProofreadingBackend(settings, databases)
     worker = WorkerRunner(
         settings,
         databases,
@@ -530,6 +553,7 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         gpu_mutex=gpu_mutex,
         llm_jp=llm_jp,
         llm_jp_base=llm_jp_base,
+        llm_jp_proofreading=llm_jp_proofreading,
         gaperon=gaperon,
     )
     should_start_worker = settings.worker.enabled if start_worker is None else start_worker
@@ -539,6 +563,19 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         run_inputs: dict[str, Any],
     ) -> None:
         """Reject Runs whose pinned local embedding dependency cannot be used."""
+        if (workflow_name == MANUSCRIPT_GENERATOR
+                and run_inputs.get("japanese_proofreading_profile")
+                in {"llmjp33b_high", "llmjp33b_adopt"}
+                and run_inputs.get("use_llm_jp", True)
+                and not llm_jp_proofreading.configured):
+            if settings.hf_proofreading.enabled:
+                raise HTTPException(status_code=503, detail=(
+                    "HF Jobs authentication is missing; configure HF_TOKEN or use hf auth login."
+                ))
+            raise HTTPException(status_code=503, detail=(
+                'LLM-jp-4.1 33B BF16 high proofreading requires its dedicated endp'
+                    'oint or model configuration.'
+            ))
 
         ingestion_uses_embedding_tokenizer = (
             workflow_name in {"translation", "ingestion", "corpus_sync"}
@@ -599,6 +636,7 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             worker.stop()
             llm_jp.stop()
             llm_jp_base.stop()
+            llm_jp_proofreading.stop()
             gaperon.stop()
 
     app = FastAPI(
@@ -700,6 +738,10 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
 
     def workflow_for_run(run: dict[str, Any]) -> WorkflowDefinition | None:
         name = str(run.get("workflow_name") or "")
+        if name == MANUSCRIPT_GENERATOR and str(run.get("workflow_version")) == "32":
+            return worker._workflow_for(
+                name, "32", run_id=str(run["id"]) if run.get("id") else None
+            )
         definition = workflows.get(name)
         if definition is None or str(definition.version) != str(run.get("workflow_version")):
             return worker.workflow_versions.get((name, str(run.get("workflow_version") or "")))
@@ -707,6 +749,12 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
 
     def workflow_payload(definition: WorkflowDefinition) -> dict[str, Any]:
         payload = definition.model_dump(mode="json")
+        if any(n.handler == "authoring.llmjp33b_prepare" for n in definition.nodes):
+            payload["japanese_proofreading_profile"] = "llmjp33b_high"
+        if any(n.handler in {"authoring.llmjp_adopt_prepare",
+                             "authoring.llmjp_adopt_prepare_sections"}
+               for n in definition.nodes):
+            payload["japanese_proofreading_profile"] = "llmjp33b_adopt"
         for node in payload["nodes"]:
             node.update(workflow_node_metadata(definition, str(node["id"])))
         payload["supports_proofreading_patches"] = workflow_supports_proofreading_patches(
@@ -769,6 +817,7 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             "retrieval_backend": settings.retrieval.backend,
             "lexical_retrieval": "ready",
             "source_reading_policy": PAGE_READING_POLICY,
+            "japanese_proofreading_profile": settings.translation.japanese_proofreading_profile,
             "semantic_retrieval": semantic_index.status(),
             "configured_device": embedding_runtime["configured_device"],
             "actual_embedding_device": embedding_runtime["actual_embedding_device"],
@@ -825,6 +874,7 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             },
             "local_models": {
                 "llm_jp": llm_jp.status(),
+                "llm_jp_proofreading": llm_jp_proofreading.status(),
                 "gaperon": gaperon.status(),
                 "llm_jp_base": llm_jp_base.status(),
             },
@@ -1628,6 +1678,9 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                     )
                 run_inputs["requested_total_length"] = requested_total_length
             run_inputs = enforce_authoring_quality_policy(run_inputs, workflow.version)
+            run_inputs["japanese_proofreading_profile"] = (
+                settings.translation.japanese_proofreading_profile
+            )
         preflight_run_model_dependencies(workflow_name, run_inputs)
         if workflow_name == MANUSCRIPT_GENERATOR and run_inputs.get("source_folder"):
             with databases.state.connect() as connection:
@@ -1688,11 +1741,13 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         "/api/runs/{run_id}/restart-authoring-from-contracts",
         status_code=201,
     )
-    def restart_authoring_from_contracts(run_id: str) -> dict[str, Any]:
+    def restart_authoring_from_contracts(
+        run_id: str, from_argument: bool = False,
+    ) -> dict[str, Any]:
         """Create a same-version Run from the matching pre-contract snapshot."""
 
         preflight_run_model_dependencies(MANUSCRIPT_GENERATOR, {})
-        entry_node = "lock_section_contracts"
+        entry_node = "build_argument_graph" if from_argument else "lock_section_contracts"
         with databases.state.connect() as connection:
             try:
                 source = connection.execute(
@@ -1734,6 +1789,11 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             "snapshot_url": f"/api/runs/{created.run_id}/snapshot",
             "events_url": f"/api/runs/{created.run_id}/events",
         }
+
+    @app.post("/api/runs/{run_id}/restart-authoring-from-argument", status_code=201)
+    def restart_authoring_from_argument(run_id: str) -> dict[str, Any]:
+        """Rebuild the argument and prose in a new Run using saved evidence."""
+        return restart_authoring_from_contracts(run_id, from_argument=True)
 
     @app.post(
         "/api/runs/{run_id}/restart-authoring-from-draft",
@@ -1786,6 +1846,48 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             "events_url": f"/api/runs/{created.run_id}/events",
         }
 
+    @app.post("/api/runs/{run_id}/restart-authoring-from-footnotes", status_code=201)
+    def restart_authoring_from_footnotes(run_id: str) -> dict[str, Any]:
+        """Keep the source Run intact and execute its saved rendering tail in a new Run."""
+        preflight_run_model_dependencies(MANUSCRIPT_GENERATOR, {"use_rag": False})
+        with databases.state.connect() as connection:
+            try:
+                created = RunRepository(connection).create_authoring_render_restart(
+                    run_id, workflow_version="32",
+                )
+            except FukamiruError as exc:
+                status = 404 if str(exc).startswith("Unknown run:") else 409
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+        return {
+            "run_id": created.run_id, "status": "queued", "event_id": created.event_id,
+            "restart_node_id": "render_evidence_footnotes", "source_run_id": run_id,
+            "snapshot_run_id": created.snapshot_run_id,
+            "snapshot_node_run_id": created.snapshot_node_run_id, "plan_id": created.plan_id,
+            "snapshot_url": f"/api/runs/{created.run_id}/snapshot",
+            "events_url": f"/api/runs/{created.run_id}/events",
+        }
+
+    @app.post("/api/runs/{run_id}/restart-authoring-from-final-audit", status_code=201)
+    def restart_authoring_from_final_audit(run_id: str) -> dict[str, Any]:
+        """Re-audit saved frozen HTML in a new Run, preserving the source history."""
+        preflight_run_model_dependencies(MANUSCRIPT_GENERATOR, {"use_rag": False})
+        with databases.state.connect() as connection:
+            try:
+                created = RunRepository(connection).create_authoring_audit_restart(
+                    run_id, workflow_version="32",
+                )
+            except FukamiruError as exc:
+                status = 404 if str(exc).startswith("Unknown run:") else 409
+                raise HTTPException(status_code=status, detail=str(exc)) from exc
+        return {
+            "run_id": created.run_id, "status": "queued", "event_id": created.event_id,
+            "restart_node_id": "audit_final_findings", "source_run_id": run_id,
+            "snapshot_run_id": created.snapshot_run_id,
+            "snapshot_node_run_id": created.snapshot_node_run_id, "plan_id": created.plan_id,
+            "snapshot_url": f"/api/runs/{created.run_id}/snapshot",
+            "events_url": f"/api/runs/{created.run_id}/events",
+        }
+
     @app.post("/api/runs/{run_id}/restart-v31-from-draft")
     def restart_v31_run_from_draft(run_id: str) -> dict[str, Any]:
         """Replace an inactive V31 draft tail and restart the same Run in place."""
@@ -1802,8 +1904,8 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                     source["workflow_name"]
                 ):
                     raise FukamiruError(f"Unknown run: {run_id}")
-                workflow = worker.workflow_versions.get(
-                    (source["workflow_name"], str(source["workflow_version"]))
+                workflow = worker._workflow_for(
+                    source["workflow_name"], str(source["workflow_version"]), run_id=run_id
                 )
                 if workflow is None or str(workflow.version) not in {"31", "32"}:
                     raise FukamiruError(
@@ -1852,8 +1954,8 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                     source["workflow_name"]
                 ):
                     raise FukamiruError(f"Unknown run: {run_id}")
-                workflow = worker.workflow_versions.get(
-                    (source["workflow_name"], str(source["workflow_version"]))
+                workflow = worker._workflow_for(
+                    source["workflow_name"], str(source["workflow_version"]), run_id=run_id
                 )
                 if workflow is None or str(workflow.version) not in {"31", "32"}:
                     raise FukamiruError("Prose restart requires V31 or V32 authoring")
@@ -1899,8 +2001,8 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                     source["workflow_name"]
                 ):
                     raise FukamiruError(f"Unknown run: {run_id}")
-                workflow = worker.workflow_versions.get(
-                    (source["workflow_name"], str(source["workflow_version"]))
+                workflow = worker._workflow_for(
+                    source["workflow_name"], str(source["workflow_version"]), run_id=run_id
                 )
                 if workflow is None or str(workflow.version) not in {"31", "32"}:
                     raise FukamiruError(
@@ -2014,11 +2116,25 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             ).fetchone()
             if run is None:
                 raise HTTPException(status_code=404, detail="Run not found")
-            if run["workflow_name"] != "manuscript_rewrite" or run["workflow_version"] != "29":
+            current_local = (
+                is_manuscript_generator_workflow(run["workflow_name"])
+                and run["workflow_version"] == "32"
+            )
+            if not current_local and (
+                run["workflow_name"] != "manuscript_rewrite" or run["workflow_version"] != "29"
+            ):
                 raise HTTPException(status_code=409, detail="Proofreading requires manuscript V29")
+            source_json = run["output_json"] or run["input_json"]
+            context = PayloadStore(connection).unpack(json.loads(source_json or "{}"))
+            scope = "p.run_id=?"
+            parameters: tuple[Any, ...] = (run_id,)
+            if current_local:
+                scope += " AND p.generation_id=?"
+                parameters += (str(context.get("_proofreading_generation_id") or "legacy"),)
             total = int(
                 connection.execute(
-                    "SELECT COUNT(*) FROM manuscript_proofreading_patches WHERE run_id=?", (run_id,)
+                    "SELECT COUNT(*) FROM manuscript_proofreading_patches p WHERE " + scope,
+                    parameters,
                 ).fetchone()[0]
             )
             rows = connection.execute(
@@ -2026,13 +2142,20 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
                 "s.start_offset,s.end_offset "
                 "FROM manuscript_proofreading_patches p "
                 "JOIN manuscript_proofreading_sentences s ON s.id=p.sentence_id "
-                "WHERE p.run_id=? ORDER BY s.block_id,s.sentence_ordinal,p.candidate_ordinal "
+                "WHERE " + scope + " ORDER BY s.block_id,s.sentence_ordinal,p.candidate_ordinal "
                 "LIMIT ? OFFSET ?",
-                (run_id, limit, offset),
+                (*parameters, limit, offset),
             ).fetchall()
-            source_json = run["output_json"] or run["input_json"]
-            context = PayloadStore(connection).unpack(json.loads(source_json or "{}"))
-        source_html = str(context.get("proposed_html") or "")
+            local_audits = {}
+            if current_local:
+                from fukamiru.worker.proofreading_local import candidate_audit
+
+                local_audits = {row["id"]: candidate_audit(connection, row["id"]) for row in rows}
+        source_html = str(
+            (context.get("pre_proofreading_html") or context.get("pre_polish_html")
+             or context.get("proposed_html") or "") if current_local
+            else context.get("proposed_html") or ""
+        )
         block_text = {}
         if source_html:
             root = ET.fromstring(source_html)
@@ -2044,6 +2167,8 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
         records = []
         for row in rows:
             record = dict(row)
+            if current_local:
+                record["local_edit_audit"] = local_audits.get(record["id"])
             original_block = block_text.get(record["block_id"], "")
             start, end = record["start_offset"], record["end_offset"]
             record["preview_text"] = (
@@ -2326,6 +2451,52 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             except FukamiruError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    def knowledge_results(
+        query: str, limit: int, metadata_filters: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        with databases.knowledge.connect() as connection:
+            return KnowledgeSearchService(
+                connection, semantic_index=semantic_index, rrf_k=settings.retrieval.hybrid_rrf_k,
+            ).search(query, limit=limit, metadata_filters=metadata_filters)
+
+    @app.post("/api/search-reports", status_code=201)
+    def generate_search_report(payload: SearchReportRequest) -> dict[str, Any]:
+        try:
+            results = knowledge_results(payload.query.strip(), payload.limit)
+            corpus = ReportCorpus(databases.knowledge.connect,
+                                  settings.paths.runtime_root / "cache" / "search-report-pages"
+                                  / str(uuid.uuid4()))
+            report = research_report(payload.query, results, corpus,
+                                     CodexAuthoringAdapter(settings).generate)
+        except FukamiruError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"レポートを作成できませんでした: {exc}",
+            ) from exc
+        with databases.state.connect() as connection:
+            SearchReportRepository(connection).save(report)
+        return report
+
+    @app.get("/api/search-reports")
+    def list_search_reports(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
+        with databases.state.connect() as connection:
+            return SearchReportRepository(connection).list(limit)
+
+    @app.get("/api/search-reports/{report_id}")
+    def get_search_report(report_id: str) -> dict[str, Any]:
+        with databases.state.connect() as connection:
+            report = SearchReportRepository(connection).get(report_id)
+        if report is None:
+            raise HTTPException(status_code=404, detail="検索レポートがありません。")
+        return report
+
+    @app.get("/api/search-reports/{report_id}/export.html")
+    def export_search_report(report_id: str) -> HTMLResponse:
+        report = get_search_report(report_id)
+        return HTMLResponse(export_document(report), headers={
+            "Content-Disposition": f'attachment; filename="search-report-{report["id"]}.html"',
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+        })
+
     @app.get("/api/search")
     def search_knowledge(
         q: str = Query(min_length=1, max_length=1000),
@@ -2349,15 +2520,10 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
             }.items()
             if value is not None
         }
-        with databases.knowledge.connect() as connection:
-            try:
-                results = KnowledgeSearchService(
-                    connection,
-                    semantic_index=semantic_index,
-                    rrf_k=settings.retrieval.hybrid_rrf_k,
-                ).search(q, limit=limit, metadata_filters=metadata_filters)
-            except FukamiruError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            results = knowledge_results(q, limit, metadata_filters)
+        except FukamiruError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"query": q, "count": len(results), "results": results}
 
     @app.get("/api/source-assets/{source_asset_id}/passages")
@@ -3072,6 +3238,15 @@ def create_app(settings: Settings, *, start_worker: bool | None = None) -> FastA
     ui_root = repository_root / "ui"
     workflow_diagram_root = repository_root / "docs" / "diagrams"
     rag_workflow_report = workflow_diagram_root / "knowledge-ingestion.html"
+
+    @app.get("/workflow-diagrams/manuscript-generation.html")
+    def get_daily_manuscript_diagram() -> FileResponse:
+        filename = {
+            "llmjp33b_high": "manuscript-proofreading-high-graph.html",
+            "llmjp33b_adopt": "manuscript-proofreading-adopt-graph.html",
+        }.get(settings.translation.japanese_proofreading_profile,
+              "manuscript-generation.html")
+        return FileResponse(workflow_diagram_root / filename, media_type="text/html; charset=utf-8")
 
     @app.get("/workflow-reports/knowledge-ingestion.html")
     def get_rag_creation_workflow_report() -> FileResponse:

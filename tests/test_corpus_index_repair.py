@@ -19,6 +19,7 @@ from fukamiru.knowledge.scalable_index import (
 )
 from fukamiru.knowledge.semantic import FaissSemanticIndex
 from fukamiru.knowledge.service import IngestionService, split_token_bounded
+from fukamiru.ocr.service import DocumentOCRService
 from fukamiru.storage.database import DatabasePair
 from fukamiru.storage.runs import RunRepository
 
@@ -45,6 +46,198 @@ def shared_character_offsets(text, *_args, **_kwargs):
     # A real subword tokenizer may emit two tokens for the same Unicode character.
     return [(i, i + 1) for i, char in enumerate(text)
             for _ in range(2 if char == "漢" else 1)], "shared-character-fixture"
+
+
+def test_corpus_discovers_only_new_content_and_preserves_existing_sources(environment):
+    settings, databases = environment
+    root = settings.paths.corpus_root / "managed_sources"
+    root.mkdir(parents=True, exist_ok=True)
+    unchanged, changed = root / "unchanged.txt", root / "changed.txt"
+    unchanged.write_text("unchanged canonical content", encoding="utf-8")
+    changed.write_text("previous canonical content", encoding="utf-8")
+    with databases.knowledge.connect() as c:
+        for path in (unchanged, changed):
+            IngestionService(c, settings).ingest_path(str(path))
+        before = [tuple(row) for row in c.execute("SELECT * FROM chunks ORDER BY id")]
+        assets = [tuple(row) for row in c.execute("SELECT * FROM source_assets ORDER BY id")]
+    changed.write_text("replacement canonical content", encoding="utf-8")
+    alias = root / "alias.txt"
+    alias.write_bytes(unchanged.read_bytes())
+    (root / "new.txt").write_text("entirely new content", encoding="utf-8")
+    with databases.state.connect() as c:
+        run = RunRepository(c).create(
+            workflow_name="corpus_sync", workflow_version="2", entry_node="scan_sources",
+            project_id=None, inputs={},
+        ).run_id
+    service = CorpusSyncService(databases, settings)
+    with patch.object(IngestionService, "extract", side_effect=AssertionError("discovery parsed")):
+        scanned = service.scan(run, str(root))
+    assert scanned["scanned_count"] == 4 and scanned["existing_count"] == 2
+    assert scanned["discovered_count"] == 2
+    snapshot = service.snapshot(scanned["corpus_batch_id"])
+    items = {item["relative_path"]: item for item in snapshot["items"]}
+    assert items["unchanged.txt"]["skip_reason"] == "already_ingested"
+    assert items["alias.txt"]["status"] == "skipped"
+    assert items["changed.txt"]["status"] == items["new.txt"]["status"] == "discovered"
+    with databases.knowledge.connect() as c:
+        assert before == [tuple(row) for row in c.execute("SELECT * FROM chunks ORDER BY id")]
+        assert c.execute("SELECT COUNT(*) FROM source_assets").fetchone()[0] == 2
+        assert c.execute("SELECT COUNT(*) FROM source_locations").fetchone()[0] == 3
+        assert assets == [tuple(row) for row in c.execute(
+            "SELECT * FROM source_assets ORDER BY id")]
+        assert c.execute("SELECT is_primary FROM source_locations WHERE path=?",
+                         (str(alias),)).fetchone()[0] == 0
+
+
+def test_excluding_existing_sources_preserves_failures_and_completed_additions(environment):
+    settings, databases = environment
+    root = settings.paths.corpus_root / "managed_sources"
+    root.mkdir(parents=True, exist_ok=True)
+    paths = [root / name for name in ("existing.txt", "addition.txt", "missing.txt")]
+    for index, path in enumerate(paths):
+        path.write_text(f"distinct source content {index}", encoding="utf-8")
+    with databases.state.connect() as c:
+        run = RunRepository(c).create(
+            workflow_name="corpus_sync", workflow_version="2", entry_node="scan_sources",
+            project_id=None, inputs={},
+        ).run_id
+    service = CorpusSyncService(databases, settings)
+    batch = service.scan(run, str(root))["corpus_batch_id"]
+    with databases.knowledge.connect() as c:
+        for path in paths[:2]:
+            IngestionService(c, settings).ingest_path(str(path))
+    error = '{"type":"IntegrityError","message":"historical duplicate"}'
+    with databases.state.connect() as c:
+        c.execute("UPDATE corpus_sync_items SET status='failed',error_json=? WHERE source_path=?",
+                  (error, str(paths[0])))
+        c.execute("UPDATE corpus_sync_items SET status='ready' WHERE source_path=?",
+                  (str(paths[1]),))
+        c.commit()
+    paths[2].unlink()
+    assert service.skip_existing_sources(batch) == {"skipped_count": 1, "discovered_count": 2}
+    assert service.skip_existing_sources(batch) == {"skipped_count": 0, "discovered_count": 2}
+    snapshot = service.snapshot(batch)
+    items = {item["relative_path"]: item for item in snapshot["items"]}
+    assert items["existing.txt"]["status"] == "skipped"
+    assert items["existing.txt"]["previous_status"] == "failed"
+    assert items["existing.txt"]["error"] == json.loads(error)
+    assert items["addition.txt"]["status"] == "ready"
+    assert items["missing.txt"]["status"] == "discovered"
+    assert snapshot["batch"]["failed_count"] == 0
+
+
+def interrupted_ingestion(environment, job_status="needs_language"):
+    settings, databases = environment
+    root = settings.paths.corpus_root / "managed_sources"
+    old, addition = root / "old.txt", root / "new.txt"
+    old.write_text("already saved content", encoding="utf-8")
+    addition.write_text("new pending addition", encoding="utf-8")
+    with databases.state.connect() as c:
+        run = RunRepository(c).create(
+            workflow_name="corpus_sync", workflow_version="2", entry_node="scan_sources",
+            project_id=None, inputs={"root_path": str(root)},
+        ).run_id
+    service = CorpusSyncService(databases, settings)
+    scanned = service.scan(run, str(root))
+    batch = scanned["corpus_batch_id"]
+    with databases.knowledge.connect() as c:
+        IngestionService(c, settings).ingest_path(str(old))
+    with databases.state.connect() as c:
+        c.execute("UPDATE runs SET status='running' WHERE id=?", (run,))
+        c.execute("UPDATE node_runs SET status='completed' WHERE run_id=?", (run,))
+        c.execute("INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,"
+                  "started_at,resource_lane,lease_expires_at) VALUES "
+                  "('interrupted',?,'ingest_ready_sources',1,'running',?,"
+                  "'2000-01-01T00:00:00Z','ingestion_cpu','2000-01-01T00:01:00Z')",
+                  (run, json.dumps(scanned)))
+        item = c.execute("SELECT id FROM corpus_sync_items WHERE batch_id=? AND source_path=?",
+                         (batch, str(old))).fetchone()[0]
+        c.execute("UPDATE corpus_sync_items SET status='ocr_required',error_json=? WHERE id=?",
+                  ('{"ocr_job_id":"obsolete","ocr_status":"needs_language"}', item))
+        c.execute("INSERT INTO pdf_ocr_jobs(id,run_id,corpus_item_id,source_path,source_sha256,"
+                  "source_language,status,created_at,updated_at,error_json) "
+                  "VALUES ('obsolete',?,?,?,?,'und',?,'then','then',?)",
+                  (run, item, str(old), hashlib.sha256(old.read_bytes()).hexdigest(), job_status,
+                   '{"message":"original OCR diagnostic"}'))
+        c.commit()
+    return service, run, batch
+
+
+@pytest.mark.parametrize("status", ["needs_language", "queued", "failed"])
+def test_existing_source_cancels_obsolete_ocr_without_erasing_history(environment, status):
+    settings, databases = environment
+    service, run, batch = interrupted_ingestion(environment, status)
+    assert service.skip_existing_sources(batch)["skipped_count"] == 1
+    with databases.state.connect() as c:
+        job = dict(c.execute("SELECT * FROM pdf_ocr_jobs WHERE id='obsolete'").fetchone())
+        assert job["status"] == "cancelled" and job["attempt"] == 0
+        assert job["error_json"] == '{"message":"original OCR diagnostic"}'
+        event = c.execute("SELECT payload_json FROM event_log "
+                          "WHERE event_type='ocr.job.cancelled'").fetchone()[0]
+        assert json.loads(event)["previous_status"] == status
+    with patch.object(DocumentOCRService, "resolve_language_from_images",
+                      side_effect=AssertionError("obsolete language wait")), \
+            patch.object(DocumentOCRService, "process_job",
+                         side_effect=AssertionError("obsolete OCR")):
+        jobs = DocumentOCRService(databases, settings).process_run_jobs(run, output_format="md")
+    assert [job["status"] for job in jobs] == ["cancelled"]
+
+
+def test_exclusion_rolls_back_when_ocr_is_processing(environment):
+    _, databases = environment
+    service, _, batch = interrupted_ingestion(environment, "processing")
+    with pytest.raises(FukamiruError, match="Stop OCR"):
+        service.skip_existing_sources(batch)
+    with databases.state.connect() as c:
+        assert not c.execute("SELECT 1 FROM corpus_sync_items WHERE skip_reason IS NOT NULL"
+                             ).fetchall()
+        assert c.execute("SELECT status FROM pdf_ocr_jobs").fetchone()[0] == "processing"
+
+
+def test_interrupted_ingestion_resumes_in_new_attempt_with_original_input_intact(environment):
+    _, databases = environment
+    service, run, batch = interrupted_ingestion(environment)
+    with databases.state.connect() as c:
+        original = dict(c.execute("SELECT * FROM node_runs WHERE id='interrupted'").fetchone())
+        run_input = c.execute("SELECT input_json FROM runs WHERE id=?", (run,)).fetchone()[0]
+        with pytest.raises(FukamiruError, match="not been repaired"):
+            RunRepository(c).resume_interrupted_corpus_ingestion(
+                run, batch, expected_node_run_id="interrupted")
+    service.skip_existing_sources(batch)
+    with databases.state.connect() as c:
+        with pytest.raises(FukamiruError, match="lease does not match"):
+            RunRepository(c).resume_interrupted_corpus_ingestion(
+                run, batch, expected_node_run_id="wrong")
+        result = RunRepository(c).resume_interrupted_corpus_ingestion(
+            run, batch, expected_node_run_id="interrupted")
+        assert result["attempt"] == 2
+        prior = dict(c.execute("SELECT * FROM node_runs WHERE id='interrupted'").fetchone())
+        for key in ("input_json", "started_at", "lease_expires_at", "attempt"):
+            assert prior[key] == original[key]
+        assert prior["status"] == "cancelled"
+        assert json.loads(prior["error_json"])["replacement_node_run_id"] == result["node_run_id"]
+        new = c.execute("SELECT * FROM node_runs WHERE id=?", (result["node_run_id"],)).fetchone()
+        context = json.loads(new["input_json"])
+        assert context["discovered_count"] == context["existing_count"] == 1
+        assert context["scanned_count"] == 2 and new["status"] == "queued"
+        assert c.execute("SELECT input_json FROM runs WHERE id=?", (run,)
+                         ).fetchone()[0] == run_input
+        with pytest.raises(FukamiruError, match="not an interrupted"):
+            RunRepository(c).resume_interrupted_corpus_ingestion(
+                run, batch, expected_node_run_id="interrupted")
+
+
+def test_live_ingestion_lease_blocks_exclusion_and_resume(environment):
+    _, databases = environment
+    service, run, batch = interrupted_ingestion(environment)
+    with databases.state.connect() as c:
+        c.execute("UPDATE node_runs SET lease_expires_at='2999-01-01' WHERE id='interrupted'")
+        c.commit()
+        with pytest.raises(FukamiruError, match="lease does not match"):
+            RunRepository(c).resume_interrupted_corpus_ingestion(
+                run, batch, expected_node_run_id="interrupted")
+    with pytest.raises(FukamiruError, match="Stop ingestion"):
+        service.skip_existing_sources(batch)
 
 
 def test_retokenized_slices_are_bounded_and_form_an_exact_character_partition():

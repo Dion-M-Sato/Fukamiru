@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fukamiru.authoring.codex import describe_authoring_request
+from fukamiru.authoring.codex import CodexAuthoringAdapter, describe_authoring_request
 from fukamiru.bootstrap import bootstrap
 from fukamiru.config import load_settings
 from fukamiru.errors import FukamiruError
@@ -235,6 +235,36 @@ def test_schema_valid_semantic_mismatch_is_not_saved(worker_case):
         assert connection.execute("SELECT COUNT(*) FROM llm_result_checkpoints").fetchone()[0] == 0
 
 
+def test_concept_checkpoint_probe_never_invokes_a_model_on_miss_or_invalid_cache(worker_case):
+    import json
+
+    runner, adapter, claimed, databases = worker_case
+    payload = {"units": [{"unit_id": "/text", "text": "説明する。", "field_role": "claim"}],
+               "material": {}}
+    calls = []
+
+    def generate(stage, value, context=""):
+        calls.append(stage)
+        return {"units": [{"unit_id": "/text", "concepts": []}], "omissions": []}
+
+    adapter.generate = generate
+    args = {"context": {}, "payload": payload, "operation_name": "concept-probe"}
+    assert runner._authoring_load_concept_review_checkpoint(claimed, **args) is None
+    assert not calls
+    expected = runner._authoring_invoke_raw(claimed, stage="review_concept_fit_v32", **args)
+    assert runner._authoring_load_concept_review_checkpoint(claimed, **args) == expected
+    assert len(calls) == 1
+    assert runner._authoring_load_concept_review_checkpoint(
+        claimed, **{**args, "payload": {**payload, "material": {"changed": True}}},
+    ) is None
+    assert len(calls) == 1
+    with databases.state.connect() as connection:
+        connection.execute("UPDATE llm_result_checkpoints SET result_json=? WHERE run_id=?",
+                           (json.dumps({"units": [], "omissions": []}), claimed.run_id))
+    assert runner._authoring_load_concept_review_checkpoint(claimed, **args) is None
+    assert len(calls) == 1
+
+
 def test_seed_failure_does_not_launch_fanout(worker_case):
     runner, adapter, claimed, _databases = worker_case
     adapter.fail_first = True
@@ -288,3 +318,24 @@ def test_observation_preserves_null_and_reported_zero():
         "saved": 0,
         "invalidated": 0,
     }
+
+
+def test_actual_stage_model_is_used_in_checkpoint_identity(worker_case):
+    runner, _adapter, claimed, _databases = worker_case
+    runner.authoring_adapter = CodexAuthoringAdapter(runner.settings)
+    for stage, model, effort in [
+        ("review_japanese_change_scope_v32", "gpt-5.6-sol", "medium"),
+        ("format_adopted_japanese_v32", "gpt-6-luna", "low"),
+    ]:
+        request, key = runner._authoring_checkpoint_material(
+            claimed, stage=stage, context={}, payload={}, operation_name=stage,
+            retrieval_context="",
+        )
+        assert (request.model, request.reasoning_effort) == (model, effort)
+        expected = describe_authoring_request(stage, {}, model=model)
+        assert key == build_checkpoint_key(
+            run_id=claimed.run_id, workflow_version=claimed.workflow_version,
+            node_id=claimed.node_id, operation_name=stage, request=expected,
+            plan_id=None, plan_revision=None, source_revision_id=None,
+            checkpoint_variant="normal",
+        )

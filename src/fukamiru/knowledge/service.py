@@ -34,7 +34,6 @@ from fukamiru.knowledge.model_cache import (
     resolve_local_model_snapshot,
 )
 from fukamiru.knowledge.pdf_layout import (
-    ANALYZER_VERSION,
     PDFLayoutAnalyzer,
     PDFLayoutHTMLRenderer,
     PDFLayoutRepository,
@@ -332,6 +331,11 @@ class IngestionService:
         return classify_language(text)[0]
 
     def has_reusable_source(self, source: LocatedSource) -> bool:
+        """Reuse canonical content by hash, independently of the installed parser.
+
+        A parser upgrade or missing derived HTML must not replace saved source
+        text, OCR corrections, spans, or chunks during ordinary ingestion.
+        """
         asset = self.connection.execute(
             """
             SELECT a.id FROM source_assets a
@@ -340,23 +344,7 @@ class IngestionService:
             """,
             (source.sha256,),
         ).fetchone()
-        if asset is None:
-            return False
-        if source.path.suffix.casefold() != ".pdf":
-            return True
-        layout = self.connection.execute(
-            """
-            SELECT analyzer_version, structured_html_path FROM pdf_layout_documents
-            WHERE source_asset_id = ? ORDER BY created_at DESC LIMIT 1
-            """,
-            (asset["id"],),
-        ).fetchone()
-        return bool(
-            layout is not None
-            and layout["analyzer_version"] == ANALYZER_VERSION
-            and layout["structured_html_path"]
-            and Path(str(layout["structured_html_path"])).is_file()
-        )
+        return asset is not None
 
     def register(self, source: LocatedSource, source_language: str | None = None) -> str:
         now = utc_now()
@@ -1152,13 +1140,11 @@ class IngestionService:
             """,
             (source_asset_id,),
         ).fetchone()
-        layout_required = source.path.suffix.casefold() == ".pdf"
         if (
             reusable
             and ready
             and ready["ingestion_status"] == "ready"
             and existing
-            and (not layout_required or layout is not None)
         ):
             bibliography = ensure_source_bibliography(
                 self.connection,

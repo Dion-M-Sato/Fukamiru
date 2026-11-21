@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "node --check src/app.js && node --check src/api.js && node --test tests/*.test.mjs"
+    "check": "node --check src/app.js && node --check src/api.js && node --test tests/*.test.mjs",
+    "check:browser": "node tests/review-workspace.browser.mjs && node tests/knowledge-search-reports.browser.mjs && node tests/knowledge-excerpts.browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
   }
 }

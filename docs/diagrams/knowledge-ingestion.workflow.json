@@ -6,7 +6,7 @@
     "workflowVersion": "2",
     "source": "fukamiru.workflow.templates.corpus_sync_workflow",
     "parallel_node_count": 2,
-    "note": "corpus_sync V2は原文を2レーンで取り込みながら、独立した言語判定レーンとOCRレーンで並行実行します。画像LLM言語判定は2件同時に開始し、成功に応じて設定されたCodex同時実行上限まで（現在は3件）増やします。429応答時だけ同時実行数を減らして全体を一時待機し、各ジョブの再試行時刻と最大15分の指数バックオフを保存します。OCRはページ見出し付きMarkdownとJSONを保存し、元のItemを同期キューへ戻します。PDF解析結果を共用し、OCR来歴を一括保存し、Chunk計算後の短いトランザクションで検索データを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 Corpus同期の既定対象はmanaged_sourcesとimport_stagingです。親フォルダを選んだ場合もこの2箇所だけを走査し、archivedとoa_downloadsは含めません。元ファイルは移動せず、対応形式のみを収集します。 レイアウト解析が失敗したPDFも、原本を保持したまま全ページを画像化して強制OCRへ送り、元Itemを同期キューへ戻します。 過去の失敗Itemも原因に応じて再投入し、完了済みOCRは同じジョブから取り込み直します。SourceSpan再構築失敗はページ画像の強制OCRへ合流します。PDF保存時の一時的ファイルロックは短く再試行し、CP932の日本語TXTを判定します。EPUBのゼロ幅書式文字だけのSpanは検索Chunkを作らず保持します。 空のPDFとmacOSの._付随ファイルは新規走査から除外し、既存Batchでは元Item・失敗履歴を保持してスキップ理由を記録し、対象総数から除外します。 NDLOCR-LiteはAPI用のCPUを確保するため、優先度とCPU使用枠を制限した直接子プロセスで実行します。PDFメタデータの読取失敗はOCR本文の取り込みを中断しません。 長大なOCR本文の段落分割は線形走査で処理し、APIの応答を塞ぐ正規表現のバックトラックを避けます。通常取り込みのPDF解析・OCR・言語判定はAPIとは別の子プロセスで実行し、サービス終了時はWindows Job Objectで子プロセスも終了します。大容量PDFのMistral OCRは最大20ページ・20MiBの範囲に分割し、原本SHAとモデルに紐付くページ群の結果を保存して再開します。NDLOCR-LiteのXML解析失敗時は同じ原本をMistral OCRへ代替します。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。",
+    "note": "corpus_sync V2は原文を2レーンで取り込みながら、独立した言語判定レーンとOCRレーンで並行実行します。画像LLM言語判定は2件同時に開始し、成功に応じて設定されたCodex同時実行上限まで（現在は3件）増やします。429応答時だけ同時実行数を減らして全体を一時待機し、各ジョブの再試行時刻と最大15分の指数バックオフを保存します。OCRはページ見出し付きMarkdownとJSONを保存し、元のItemを同期キューへ戻します。PDF解析結果を共用し、OCR来歴を一括保存し、Chunk計算後の短いトランザクションで検索データを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 Corpus同期の既定対象はmanaged_sourcesとimport_stagingです。親フォルダを選んだ場合もこの2箇所だけを走査し、archivedとoa_downloadsは含めません。元ファイルは移動せず、対応形式のみを収集します。 レイアウト解析が失敗したPDFも、原本を保持したまま全ページを画像化して強制OCRへ送り、元Itemを同期キューへ戻します。 過去の失敗Itemも原因に応じて再投入し、完了済みOCRは同じジョブから取り込み直します。SourceSpan再構築失敗はページ画像の強制OCRへ合流します。PDF保存時の一時的ファイルロックは短く再試行し、CP932の日本語TXTを判定します。EPUBのゼロ幅書式文字だけのSpanは検索Chunkを作らず保持します。 空のPDFとmacOSの._付随ファイルは新規走査から除外し、既存Batchでは元Item・失敗履歴を保持してスキップ理由を記録し、対象総数から除外します。 NDLOCR-LiteはAPI用のCPUを確保するため、優先度とCPU使用枠を制限した直接子プロセスで実行します。PDFメタデータの読取失敗はOCR本文の取り込みを中断しません。 長大なOCR本文の段落分割は線形走査で処理し、APIの応答を塞ぐ正規表現のバックトラックを避けます。通常取り込みのPDF解析・OCR・言語判定はAPIとは別の子プロセスで実行し、サービス終了時はWindows Job Objectで子プロセスも終了します。大容量PDFのMistral OCRは最大20ページ・20MiBの範囲に分割し、原本SHAとモデルに紐付くページ群の結果を保存して再開します。NDLOCR-LiteのXML解析失敗時は同じ原本をMistral OCRへ代替します。 追加取り込みはSHA-256が一致する取り込み済み資料をalready_ingestedとして除外し、追加・内容変更分だけを対象件数に含めます。既存Itemと失敗履歴は保持します。除外資料の未完了OCRジョブは履歴を残して取り消し、不要な言語待ちを解除します。PDF解析版の更新や派生HTMLの欠落だけでは保存済み本文・OCR・Chunkを再生成しません。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。",
     "summary": "検索区間v2は文字範囲と実トークン数を保証。NDLOCRはJSON専用で不要なPDF生成を省き、利用者が保留した失敗資料は履歴付きで当該Runから除外します。"
   },
   "relatedWorkflow": {
@@ -35,7 +35,7 @@
       "workflowVersion": "2",
       "source": "fukamiru.workflow.templates.ingestion_workflow",
       "parallel_node_count": 0,
-      "note": "原本PDFとページ参照を保持し、OCR来歴を一括保存します。ChunkのToken計算後に短いトランザクションでLexical索引向けデータを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。"
+      "note": "原本PDFとページ参照を保持し、OCR来歴を一括保存します。ChunkのToken計算後に短いトランザクションでLexical索引向けデータを確定します。 DBロックは新しい接続で最大4回まで復帰。暗号化PDFは全ページ画像から非暗号化PDFを作成し、不正テキスト層は文字を含まない複製を作って言語別OCRへ合流します。 文字情報で言語が未確定なら最大4ページの画像をLLMへ渡し、確信度0.90以上の主言語を言語別OCRへ自動ルーティングします。 PDF復帰はAPIから別プロセスに分離し、ジョブIDを先に記録します。画像化したページをSHA-256付きで保存し、再開時は完了ページを再利用。16ページずつ結合・保存し、描画・保存・検証・公開を別々に報告します。復帰は再起動をまたいで最大4回、無進捗300秒で失敗を記録します。 追加取り込みはSHA-256が一致する取り込み済み資料をalready_ingestedとして除外し、追加・内容変更分だけを対象件数に含めます。既存Itemと失敗履歴は保持します。除外資料の未完了OCRジョブは履歴を残して取り消し、不要な言語待ちを解除します。PDF解析版の更新や派生HTMLの欠落だけでは保存済み本文・OCR・Chunkを再生成しません。 原稿生成で表示可能な暗号化PDFを読んだ場合も同じ画像化・言語別OCRを使います。引用照合により利用価値を確認した資料はresearch_source_ingestion V1へ渡し、資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。"
     },
     "stages": [
       {
@@ -568,10 +568,10 @@
       "stage": "discovery",
       "resource_lane": "ingestion_cpu",
       "status": "guard",
-      "description": "同期対象をstate.dbへ固定し所在を更新",
+      "description": "SHA-256で取込済み資料を除外し、追加分の対象件数を確定",
       "role": "Corpus同期BatchとファイルごとのItemを登録し、既存SourceLocationの利用可能状態を更新します。",
       "target": "Run状態はstate.db、資料の所在はknowledge.dbに分離して保存します。",
-      "boundary": "Batchと全Itemをひとつのトランザクションで登録した後、所在を更新します。",
+      "boundary": "全Itemを登録した後、同じSHA-256の取込済み資料をalready_ingestedとして記録し、対象件数から除外します。元Item・状態・エラー履歴は保持します。",
       "safety": "SQLite正本を先に確定します。既存Runへの明示的な追加はワーカー停止中に行い、既存Item IDと元Run入力を保持し、追加イベントと対象件数を記録して再開します。所在の更新は選択されたルート内だけに限定します。 既存Batchから不正な入力を除外する場合は元Itemと失敗履歴を保持し、スキップ理由・時刻・イベントを記録して正本の対象件数を更新します。",
       "steps": [
         "Batch ID採番",
@@ -590,7 +590,7 @@
       "description": "原文2レーンと言語別OCR2レーンを並行稼働し、工程別の時間とCPUを記録",
       "role": "未完了Itemを原文2レーンに分け、OCRが必要なPDFはMistralとNDLOCR-Liteの専用実行枠へ送ります。各レーンの同時実行は1件までとし、Markdown完成後に元のItemを原文取り込みキューへ戻します。PDF準備・抽出・OCR来歴・Chunk生成と保存の経過時間、処理スレッドのCPU時間を試行ごとに記録します。",
       "target": "2 MiBを超えるPDFは同時に1件、それ以下のPDFとその他形式は別レーンで1件処理します。",
-      "boundary": "同じSHA-256を排他し、再利用条件を満たす資料は重いPDF解析を省いて所在と書誌を更新します。",
+      "boundary": "同じSHA-256を排他し、保存済み本文を再利用します。PDF解析版の更新や派生HTML欠落による自動再処理は行いません。",
       "safety": "同じSHA-256を排他。SQLiteのBUSY/LOCKEDだけを対象に、接続を閉じてロールバックし、新しい接続で最大4回・指数バックオフで再試行します。復帰履歴をイベントに保存し、上限到達後は失敗を記録します。 既存の失敗行は、OCR結果完成・PDF復帰対象・tokenizer依存の復旧・CP932・EPUB書式文字に限定して再投入します。HTML本文なしとZIP不正EPUBは自動再投入しません。",
       "before": "未完了Itemを形式とサイズで振り分け",
       "branches": [
@@ -962,7 +962,9 @@
       "zero_byte_pdf",
       "appledouble_sidecar"
     ],
-    "active_batch_skip": "preserve_item_and_error_exclude_from_count"
+    "active_batch_skip": "preserve_item_and_error_exclude_from_count",
+    "existing_sources": "skip_ready_canonical_sha256",
+    "parser_upgrade": "preserve_canonical_content"
   },
   "ocrReturnQueue": {
     "runtime_node": "ingest_ready_sources",
@@ -999,7 +1001,10 @@
     "estimate_is_exact": false,
     "rate_window_seconds": 600,
     "eta_scope": "preflight_only",
-    "no_service_restart_required": true
+    "no_service_restart_required": true,
+    "run_details": "numeric_phase_progress",
+    "unknown_total": "show_actual_count_without_percentage",
+    "numeric_units": "preserve_reported_unit"
   },
   "operatorCloseout": {
     "authorization": "explicit_user_instruction",
@@ -1126,6 +1131,111 @@
         "from": "run_ocr",
         "to": "register_asset",
         "condition": "success"
+      }
+    ]
+  },
+  "searchReport": {
+    "operation": "POST /api/search-reports",
+    "starts_run": false,
+    "stage": "knowledge_search_synthesis",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "medium",
+    "stages": {
+      "knowledge_search_plan": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "medium"
+      },
+      "knowledge_search_bibliography": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "medium"
+      },
+      "knowledge_search_synthesis": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "medium"
+      },
+      "knowledge_search_verification": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "medium"
+      }
+    },
+    "bibliography": "used_sources_only; source_page_proofs; independent_audit",
+    "relevance": "name_identity; contextual_body_reading; no_quota_filling",
+    "repairs": {
+      "bibliography_per_source": 1,
+      "synthesis": 1,
+      "provider_schema_failures": 0
+    },
+    "storage": "state.db:knowledge_search_reports",
+    "search_storage": "knowledge.db",
+    "canonical_format": "validated_html",
+    "max_excerpt_characters": 8000,
+    "max_context_characters": 60000,
+    "steps": [
+      {
+        "id": "search",
+        "label": "本文・書誌から候補を検索"
+      },
+      {
+        "id": "select_sources",
+        "label": "関連資料・人物を選別"
+      },
+      {
+        "id": "read_context",
+        "label": "前後の本文を読む"
+      },
+      {
+        "id": "verify_bibliography",
+        "label": "原資料で書誌を照合"
+      },
+      {
+        "id": "synthesize",
+        "label": "論点をつないで報告"
+      },
+      {
+        "id": "verify_claims",
+        "label": "主張・引用・使用書誌を再検査"
+      },
+      {
+        "id": "save",
+        "label": "報告を保存"
+      },
+      {
+        "id": "open_in_right_pane",
+        "label": "クリックで右ペイン表示"
+      }
+    ]
+  },
+  "uiExcerptReport": {
+    "mode": "ui_only",
+    "search_api": "GET /api/search",
+    "inference": false,
+    "storage": "tab_memory_latest_10",
+    "backend_restart": false,
+    "bibliography": "search_result.bibliography; missing fields explicit; no inference",
+    "steps": [
+      {
+        "id": "search",
+        "label": "既存APIで検索"
+      },
+      {
+        "id": "group_by_source",
+        "label": "資料ごとに整理"
+      },
+      {
+        "id": "render_bibliography",
+        "label": "登録書誌・未登録項目を表示"
+      },
+      {
+        "id": "render_excerpts",
+        "label": "原文と出典位置を表示"
+      },
+      {
+        "id": "open_in_right_pane",
+        "label": "クリックで右ペイン表示"
+      },
+      {
+        "id": "download_html",
+        "label": "HTML保存"
       }
     ]
   }

@@ -321,6 +321,8 @@ class AuthoringRepositoryTests(unittest.TestCase):
                 "0053_review_feedback",
                 "0054_typed_manuscript_research_sources",
                 "0055_manuscript_proofreading_generations",
+                "0056_knowledge_search_reports",
+                "0057_hf_proofreading_jobs",
             ],
             migrated_database.migrate(),
         )

@@ -61,7 +61,12 @@ def _database(tmp_path, *, legacy=False):
         _authoring_reader_facing_v31_findings=WorkerRunner._authoring_reader_facing_v31_findings,
         llm_jp=SimpleNamespace(
             model_identity="test",
-            complete_json=lambda **kw: {"candidate": "新文を詳しく検討する。"},
+            complete_json=lambda **kw: {
+                **{key: json.loads(kw["user_prompt"])[key] for key in (
+                    "sentence_id", "source_sentence_id", "block_id", "original_hash",
+                )},
+                "edits": [{"before": "新文を", "after": "新文を詳しく", "reason": "説明を補う"}],
+            },
         ),
         settings=SimpleNamespace(
             translation=SimpleNamespace(manuscript_polish_max_output_tokens=300)
@@ -154,7 +159,9 @@ def test_migration_preserves_old_proofreading_records_and_foreign_keys(tmp_path)
             table: [dict(row) for row in c.execute(f"SELECT * FROM {table}")] for table in TABLES
         }
     current = SQLiteDatabase(tmp_path / "state.db", MIGRATIONS)
-    assert current.migrate() == ["0055_manuscript_proofreading_generations"]
+    assert current.migrate() == ["0055_manuscript_proofreading_generations",
+                                 "0056_knowledge_search_reports",
+                                 "0057_hf_proofreading_jobs"]
     with current.connect() as c:
         for table, rows in before.items():
             after = [dict(row) for row in c.execute(f"SELECT * FROM {table}")]

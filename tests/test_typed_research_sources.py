@@ -42,7 +42,9 @@ def test_typed_research_source_migration_preserves_records_and_verification(tmp_
         ).fetchone())
     current = SQLiteDatabase(tmp_path / "state.db", migrations)
     assert current.migrate() == ["0054_typed_manuscript_research_sources",
-                                 "0055_manuscript_proofreading_generations"]
+                                 "0055_manuscript_proofreading_generations",
+                                 "0056_knowledge_search_reports",
+                                 "0057_hf_proofreading_jobs"]
     assert current.migrate() == []
     with current.connect() as connection:
         after = dict(connection.execute(

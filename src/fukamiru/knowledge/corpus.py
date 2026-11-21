@@ -144,12 +144,143 @@ class CorpusSyncService:
             connection.commit()
         for base in self.source_roots(root):
             self._mark_locations(base, [path for path in files if path.is_relative_to(base)])
+        existing = self.skip_existing_sources(batch_id)
         return {
             "corpus_batch_id": batch_id,
             "corpus_root": str(root),
             "corpus_source_roots": [str(base) for base in self.source_roots(root)],
-            "discovered_count": len(files),
+            "scanned_count": len(files),
+            "existing_count": existing["skipped_count"],
+            "discovered_count": existing["discovered_count"],
         }
+
+    def skip_existing_sources(self, batch_id: str) -> dict[str, int]:
+        """Exclude unchanged canonical sources, retaining the original Item history.
+
+        Used by discovery and explicit batch repair with ingestion workers stopped.
+        Compare content hashes so changed files at an existing path remain eligible,
+        while an unchanged file at a new path reuses the same canonical source.
+        """
+        with self.databases.state.connect() as state:
+            active = state.execute(
+                "SELECT 1 FROM node_runs WHERE run_id=(SELECT run_id FROM "
+                "corpus_sync_batches WHERE id=?) AND node_id='ingest_ready_sources' "
+                "AND status='running' AND lease_expires_at>?", (batch_id, utc_now()),
+            ).fetchone()
+            if active:
+                raise FukamiruError("Stop ingestion workers before excluding existing sources")
+            batch = state.execute(
+                "SELECT run_id,status FROM corpus_sync_batches WHERE id=?", (batch_id,)
+            ).fetchone()
+            if batch is None or batch["status"] != "ingesting":
+                raise FukamiruError("Excluding existing sources requires an ingestion batch")
+            rows = state.execute(
+                "SELECT id,source_path,status,error_json FROM corpus_sync_items "
+                "WHERE batch_id=? AND skip_reason IS NULL", (batch_id,)
+            ).fetchall()
+        skipped = []
+        with self.databases.knowledge.connect() as knowledge:
+            ingestion = IngestionService(knowledge, self.settings)
+            for row in rows:
+                # Completed additions belong to this batch even on an explicit repair.
+                if row["status"] in {"ready", "reused"}:
+                    continue
+                try:
+                    source = ingestion.locate(str(row["source_path"]))
+                except (OSError, FukamiruError):
+                    # Let ingestion record unavailable/invalid sources as failures.
+                    continue
+                existing = knowledge.execute(
+                    "SELECT a.id AS source_asset_id,d.id AS document_unit_id "
+                    "FROM source_assets a JOIN document_units d ON d.source_asset_id=a.id "
+                    "WHERE a.sha256=? AND a.ingestion_status='ready' "
+                    "ORDER BY d.sequence_index LIMIT 1", (source.sha256,)
+                ).fetchone()
+                if existing is None:
+                    continue
+                location = knowledge.execute(
+                    "SELECT 1 FROM source_locations WHERE source_asset_id=? AND path=?",
+                    (existing["source_asset_id"], str(source.path)),
+                ).fetchone()
+                if location is None:
+                    # An alias adds a location without changing the canonical
+                    # asset's managed path, primary location or saved content.
+                    seen = utc_now()
+                    knowledge.execute(
+                        "UPDATE source_locations SET is_primary=0,is_available=0 "
+                        "WHERE path=? AND source_asset_id<>?",
+                        (str(source.path), existing["source_asset_id"]),
+                    )
+                    knowledge.execute(
+                        "INSERT INTO source_locations(source_asset_id,path,is_primary,"
+                        "first_seen_at,last_verified_at) VALUES (?,?,0,?,?)",
+                        (existing["source_asset_id"], str(source.path), seen, seen),
+                    )
+                    knowledge.commit()
+                skipped.append((dict(row), dict(existing)))
+        now = utc_now()
+        with self.databases.state.connect() as state:
+            state.execute("BEGIN IMMEDIATE")
+            current = state.execute(
+                "SELECT status FROM corpus_sync_batches WHERE id=?", (batch_id,),
+            ).fetchone()
+            active = state.execute(
+                "SELECT 1 FROM node_runs WHERE run_id=? AND node_id='ingest_ready_sources' "
+                "AND status='running' AND lease_expires_at>?", (batch["run_id"], now),
+            ).fetchone()
+            if current["status"] != "ingesting" or active:
+                raise FukamiruError("Corpus ingestion changed while excluding existing sources")
+            for row, existing in skipped:
+                changed = state.execute(
+                    "UPDATE corpus_sync_items SET skip_reason='already_ingested',skipped_at=?,"
+                    "updated_at=?,source_asset_id=?,document_unit_id=? "
+                    "WHERE id=? AND skip_reason IS NULL AND status=?",
+                    (now, now, existing["source_asset_id"], existing["document_unit_id"],
+                     row["id"], row["status"]),
+                ).rowcount
+                if changed != 1:
+                    raise FukamiruError("Corpus item changed while excluding existing sources")
+                payload = {
+                    "reason": "already_ingested", "source_path": row["source_path"],
+                    "previous_status": row["status"],
+                    "previous_error": json.loads(row["error_json"] or "{}"), **existing,
+                }
+                state.execute(
+                    "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                    "payload_json,created_at) VALUES (?,'corpus.item.skipped',"
+                    "'corpus_sync_item',?,?,?)",
+                    (batch["run_id"], row["id"], json.dumps(payload, ensure_ascii=False), now),
+                )
+                jobs = state.execute(
+                    "SELECT id,status,error_json FROM pdf_ocr_jobs WHERE run_id=? "
+                    "AND corpus_item_id=? AND status NOT IN ('completed','cancelled')",
+                    (batch["run_id"], row["id"]),
+                ).fetchall()
+                for job in jobs:
+                    if job["status"] == "processing":
+                        raise FukamiruError("Stop OCR workers before excluding existing sources")
+                    state.execute(
+                        "UPDATE pdf_ocr_jobs SET status='cancelled',completed_at=?,updated_at=? "
+                        "WHERE id=? AND status=?",
+                        (now, now, job["id"], job["status"]),
+                    )
+                    state.execute(
+                        "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                        "payload_json,created_at) VALUES (?,'ocr.job.cancelled',"
+                        "'pdf_ocr_job',?,?,?)",
+                        (batch["run_id"], job["id"], json.dumps({
+                            "reason": "already_ingested", "corpus_item_id": row["id"],
+                            "previous_status": job["status"],
+                            "previous_error": json.loads(job["error_json"] or "{}"),
+                        }, ensure_ascii=False), now),
+                    )
+            state.commit()
+        self.refresh_counts(batch_id)
+        with self.databases.state.connect() as state:
+            total = state.execute(
+                "SELECT discovered_count FROM corpus_sync_batches WHERE id=?", (batch_id,)
+            ).fetchone()[0]
+        return {"skipped_count": len(skipped), "discovered_count": int(total)}
 
     def include_import_staging(self, batch_id: str) -> dict[str, Any]:
         """Extend a full managed batch while its ingestion workers are stopped.

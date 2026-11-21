@@ -1,59 +1,127 @@
 # ふかみる / Fukamiru
 
-資料の取り込み、検索、翻訳、原稿生成、人間によるレビューを、ローカルのブラウザで行う研究ワークベンチです。
+研究資料の取り込み、検索、翻訳、原稿生成、人間によるレビューを、ローカルのブラウザで行う研究ワークベンチです。
+資料と処理状態は自分の環境で管理し、AI推論や一部のOCRには外部サービスを利用します。
+ソースから導入するアプリケーションで、モデルや認証、研究資料は同梱しません。
 
-## 主な機能
+## できること
 
-- PDF・EPUB・HTML・テキストの取り込み、言語別OCR、出典と書誌情報の管理
-- SQLite全文検索、BGE-M3とFAISSを使うローカルRAG
-- 出典の調査・引用照合を伴う翻訳と原稿生成、日本語の推敲
-- 原稿の差分、保護した本文、人間による確認・承認、処理の再開
-- 質問ごとの回答・過剰要求の判断、回答履歴、回答を反映した再生成
-- 共通デザインのHTML原稿プレビュー、脚注リンク、処理フローの表示
+- PDF・EPUB・HTML・テキスト等を取り込み、OCR、書誌管理、全文検索・意味検索に利用
+- 資料の前後の本文を読み、原文引用と出典を付けた日本語の検索レポートを保存
+- メモや資料から論証・出典を検査しながら翻訳・原稿を生成
+- LLM-jpによる日本語の局所校正と、内容・引用・表記の検査
+- 原稿の差分確認、保護した人間の文章、質問ごとの回答、承認と再生成
+- 待ち行列、進捗、途中結果、再開、処理フローの確認
+- 共通スタイルのHTMLプレビューとHTML保存。引用・脚注と段落IDを保持
 
-## 動作環境
+基本導入ではProject管理、テキスト取り込み、全文検索から始められます。
+AI・OCR・意味検索は、使いたい機能の依存物と認証を追加して利用します。
 
-| 項目 | 必要な環境 |
+## アプリケーションの構成
+
+```mermaid
+flowchart LR
+    Browser[ブラウザ UI] --> App[Python API / worker]
+    App --> State[state.db：実行・原稿・レビュー]
+    App --> Knowledge[knowledge.db：資料・本文・書誌]
+    App --> Files[資料・OCR成果物・FAISS索引]
+    App --> Codex[Codex CLI：外部AI推論]
+    App --> HF[HF Jobs：必要時だけ起動する33B校正]
+    App --> OCR[NDLOCR-Lite / Mistral OCR]
+```
+
+UIはHTML・CSS・JavaScriptです。FastAPI / UvicornがUIとAPIを配信し、workerが処理を進めます。
+通常利用にNode.jsのビルドサーバーは不要です。
+SQLiteのテーブルが状態の正本で、SSEは進捗等の通知と再送に使います。
+原稿の正本は検証済みHTML、Projectごとの変更履歴はGitで管理します。
+
+`state.db`と`knowledge.db`は別ファイルです。資料・OCR結果・索引・モデル・ログもソースとは分けます。
+保存先はGit対象外の`config/local.toml`で指定し、相対パスはリポジトリ直下から解決します。
+詳細は[保存先の構成](docs/specification/storage-layout.md)を参照してください。
+
+## 基本導入
+
+Python 3.11以上、Git、Webブラウザを用意します。Windowsではリポジトリ直下で実行します。
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\scripts\windows\install.ps1
+PowerShell -ExecutionPolicy Bypass -File .\scripts\windows\start.ps1
+```
+
+ブラウザで <http://127.0.0.1:8766> を開きます。
+初回に`.venv`、`config/local.toml`、空のDBを作ります。既存のローカル設定は上書きしません。
+停止は`scripts/windows/stop.ps1`です。
+
+macOS・LinuxではPython CLIで起動できます。外部ツール連携を含む全機能の検証はWindows中心です。
+手動導入、停止、追加設定、既存環境の更新は[セットアップ](docs/setup.md)を参照してください。
+
+## 機能ごとの前提
+
+| 機能 | 必要な準備・実行場所 |
 | --- | --- |
-| 基本実行 | Python 3.11以上、Git、Webブラウザ |
-| Windows | PowerShellからインストール・起動・停止 |
-| macOS・Linux | Python CLIで起動。一部の外部ツール連携は環境ごとの確認が必要 |
-| UIの開発・検査 | Node.js / npm |
-| 翻訳・原稿生成 | 利用可能なCodex CLIと認証済みのアカウント |
-| ローカル推敲 | llama.cppの `llama-server` と対応するGGUFモデル |
-| 意味検索 | 準備済みBGE-M3キャッシュ、FAISS、PyTorch。GPU利用時は対応するCUDA環境 |
-| 保存先 | SQLite・GitにはNTFS等の対応ファイルシステムを使用 |
+| Project管理・テキスト取り込み・全文検索・HTML表示 | 基本導入だけで利用。端末上で実行 |
+| 翻訳・原稿生成・AI検索レポート | Codex CLIと利用者自身のログイン。対象モデルを利用できるアカウント |
+| 現行の日本語33B校正 | `.[hf-jobs]`、HF認証・Jobs権限・正のクレジット残高。H200 JobでLLM-jp-4.1 33B BF16を実行。Codexも使用 |
+| 同じ33Bを自前のサーバーで校正 | 適合するllama.cpp、33B BF16モデル、65,536-token contextとhigh推論。モデルを収容できる環境 |
+| 旧方式のローカル推敲 | llama.cppの`llama-server`、対応GGUF、各モデルのパス設定。現行33B方式とは別profile |
+| 意味検索・RAG | `.[rag]`、準備済みBGE-M3キャッシュ、FAISS、互換PyTorch。端末のGPU設定は校正用HFとは別 |
+| 日本語解析 | `.[japanese]`：MeCab・UniDic Lite・GiNZA |
+| 日本語OCR | ローカルNDLOCR-Lite。専用インストールスクリプトあり |
+| その他の対応言語のOCR | `.[ocr]`と利用者自身の`MISTRAL_API_KEY`。Mistralへ画像を送信 |
+| 補助Web検索（任意） | 別プロセスのRustXNG v0.30.0 Standard。[接続方法](docs/specification/research-source-handoff.md) |
+| UIの開発・自動検査 | Node.js / npm |
 
-個人設定はGit対象外の `config/local.toml` に保存します。DB・資料・モデル・認証情報をソースと一緒に配布しないでください。
-導入と機能別の設定は [セットアップ](docs/setup.md) を参照してください。
-レビュー画面と回答の保存・反映については [レビューの作業画面](docs/review-workspace.md) を参照してください。
+HFで33B校正する場合、その33Bを端末GPUへ載せる必要はありません。
+この方式では、端末へのllama.cpp・Docker・33Bモデルの導入も不要です。推論環境はHF側で用意します。
+端末でCUDAによるRAGを使う場合のGPU条件は別に残ります。
+Windowsの`install.ps1 -Full`はCUDA 12.6用PyTorchとRAG・日本語解析・OCRの依存を追加します。
+HFの追加依存・認証・有効化は別途必要です。基本導入では意味検索とHF自動起動は無効です。
 
-## API・外部サービス連携
+Codexのモデルは工程別に固定され、主に`gpt-5.6-sol`、表記整形等に`gpt-6-luna`を使います。
+これらを利用できるCLI・アカウントが必要です。任意モデルへの置換を保証する構成ではありません。
 
-| 連携先 | 用途 |
+## 現行の日本語校正
+
+`llmjp33b_adopt` profileでは、LLM-jp-4.1 33B thinking BF16・highが各節1回で診断・理由・局所修正案を返します。
+この方式は原稿生成の日本語校正用です。翻訳のローカル後編集と他のprofileは、それぞれ従来のモデル設定を使います。
+本文全体を書き直さず、アプリが原文対応、HTML、引用、書名、段落ID、保護本文を検査します。
+Solは内容変更や文の破損を確認し、Lunaは既存の表記規定を適用します。
+採用できない案は理由とともに人間確認へ残します。モデルの判断が常に正しいことを保証するものではありません。
+
+HF自動管理は、保存済み結果を先に確認し、未取得の節がある場合だけJobを起動します。
+校正区間の完了・失敗・取消で停止を確認し、保存済み応答を再利用します。
+応答不明の節は自動再送せず、停止未確認のJobがある間は新規割当を止めます。
+
+共有の既定profileは`local_v32`です。**現行33B方式を使うにはprofileと実行先の明示設定が必要です。**
+[導入手順](docs/setup.md#現行33b校正をhf-jobsで使う)、[校正の契約](docs/specification/japanese-proofreading.md)、
+[HFの実行・停止・復旧](docs/specification/hf-proofreading-jobs.md)を参照してください。
+
+## データの送信と保存
+
+| 送信先 | 送る情報 |
 | --- | --- |
-| OpenAI Codex CLI | 翻訳、原稿生成、根拠検査、日本語の推敲 |
-| Mistral OCR | 対応言語の資料の文字認識 |
-| OpenAlex / Crossref | 学術文献・DOI・書誌情報の検索 |
-| 国立国会図書館サーチ | 日本語文献、書誌・典拠情報の検索 |
-| Semantic Scholar / Open Library | 学術文献と書籍の候補検索 |
-| RustXNG v0.30.0（任意） | Standard プロファイルによる原稿生成の補助Web検索 |
-| 公開Webページ・検索結果 | 書誌候補の確認、公開本文の取得 |
+| Codex CLIの外部推論 | 対象文章、原稿の指示・根拠、レビュー対象。機能によりページ画像も使用 |
+| HFの校正用Job | 対象節の本文・見出しと前後各最大1段落、修正指示 |
+| Mistral OCR | OCR対象の画像・ページ |
+| 文献API・Web取得先 | 検索語、書誌の照会、公開本文の取得要求 |
 
-外部推論・OCR・検索を有効にすると、対象の文章・画像・検索語を各サービスへ送信します。接続先の認証、利用料金、利用条件は各自で確認してください。
+文献探索にはOpenAlex、Crossref、国立国会図書館サーチ、Semantic Scholar、Open Library等を利用します。
+外部推論・OCR・GPUには各サービスの認証と利用条件・料金が適用されます。
+利用者自身の認証を使い、トークンや認証ファイルをソースへ保存しないでください。
 
-## 利用しているオープンソース
+BGE-M3など端末用モデルは実行前にキャッシュへ準備します。
+HF校正用workerはJob起動時に固定モデルとランタイムを取得し、revision・容量・SHA-256を検証します。
+HFの起動時間やモデル取得時間も費用・時間枠の検討に含めてください。
 
-| 構成 | 主なソフトウェア |
-| --- | --- |
-| API・データ検証 | [FastAPI](https://fastapi.tiangolo.com/)、[Uvicorn](https://www.uvicorn.org/)、[Pydantic](https://docs.pydantic.dev/) |
-| PDF・文書処理 | [pypdf](https://github.com/py-pdf/pypdf)、[PyMuPDF / MuPDF](https://pymupdf.readthedocs.io/) |
-| 検索・機械学習 | [SQLite](https://www.sqlite.org/)、[FAISS](https://github.com/facebookresearch/faiss)、[NumPy](https://numpy.org/)、[PyTorch](https://pytorch.org/)、[Sentence Transformers](https://www.sbert.net/)、[Transformers](https://github.com/huggingface/transformers) |
-| 日本語・OCR | [MeCab](https://taku910.github.io/mecab/)、[UniDic](https://clrd.ninjal.ac.jp/unidic/)、[GiNZA](https://github.com/megagonlabs/ginza)、[NDLOCR-Lite](https://github.com/ndl-lab/ndlocr-lite) |
-| ローカル推論 | [llama.cpp](https://github.com/ggml-org/llama.cpp) |
+## 更新・検証
 
-各ソフトウェア・辞書・モデルには個別のライセンスが適用されます。PyMuPDF / MuPDFはAGPLまたはArtifex商用ライセンスです。
-利用範囲とライセンスは [第三者ソフトウェアの表記](THIRD_PARTY_NOTICES.md) を参照してください。
+更新時は利用者設定を保持し、既存migrationを変更せず新しいmigrationを追加します。
+実行中の処理を終え、二つのDBと必要なファイルを整合した状態でバックアップしてから更新してください。
+SQLite・Gitの保存先にはNTFS等の対応ファイルシステムを使い、exFATを使用しないでください。
+
+[検証記録](docs/validation.md)、[レビュー画面](docs/review-workspace.md)、
+[検索レポート](docs/specification/knowledge-search-reports.md)も参照できます。
+配布ソースとアーカイブには公開検査を行い、テストには独立した架空データを使います。
 
 ## License
 
@@ -62,9 +130,9 @@
 GPLv3の条件に従う限り、商用・非商用を問わず、自由に利用・改変・再配布できます。ただし、著作権表示およびライセンス情報を保持し、原作者を偽って再配布することは禁止します。
 
 GPLv3の条件によらない商用利用（ソースコードを非公開とする製品への組込みなど）については、別途商用ライセンスを提供しています。
-
 商用ライセンスをご希望の場合は、原作者までお問い合わせください。
 
 Copyright © 2026 [Masanao Sato]
 
-ライセンス本文は [LICENSE](LICENSE) を参照してください。別途商用ライセンスが適用される場合も、第三者ソフトウェアのライセンス条件は別に適用されます。
+ライセンス本文は[LICENSE](LICENSE)、依存物・モデル・外部ツールの条件は[第三者ソフトウェアの表記](THIRD_PARTY_NOTICES.md)を参照してください。
+別途商用ライセンスが適用される場合も、第三者ソフトウェアのライセンス条件は別に適用されます。

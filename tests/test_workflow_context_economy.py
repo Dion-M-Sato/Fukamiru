@@ -516,7 +516,8 @@ def test_authoring_draft_requires_late_bound_author_supplied_scholarship(case) -
         )
 
 
-def test_authoring_footnotes_keep_render_ready_attributed_scholarship(case) -> None:
+@pytest.mark.parametrize("actual_none", [False, True])
+def test_authoring_footnotes_keep_render_ready_attributed_scholarship(case, actual_none) -> None:
     claimed = authoring_claim(case)
     html = (
         '<article id="D" lang="ja"><section id="S"><h2 id="H">本文</h2>'
@@ -592,10 +593,40 @@ def test_authoring_footnotes_keep_render_ready_attributed_scholarship(case) -> N
         ),
     }
 
+    if actual_none:
+        # The old plan's available source is not an actual citation by the conclusion.
+        claimed = replace(claimed, workflow_version="32")
+        context["japanese_proofreading_profile"] = "llmjp33b_adopt"
+        context["proposed_html"] = html.replace(
+            "東浩紀の議論を、媒体配置の比較枠として用いる。", "本稿の結論は、人物配置の変化である。"
+        )
+        context["paragraph_boundary_lock"] = ManuscriptDiscourseService.rendered_boundary_lock(
+            context["proposed_html"], {}
+        )
+        context["realized_paragraphs"] = context["authoring_paragraph_citation_lineage"]
+        context["authoring_paragraph_citation_lineage"] = []
+        context["evidence_uses"] = [{
+            "evidence_use_id": "u1", "section_id": "S", "claim_id": "c1",
+            "sentence_id": "S-P1-S1", "source_ids": ["memo:1"],
+            "citation_required": False, "citation_source_ids": [],
+            "claim_role": "author_inference", "evidence_kind": "memo_summary",
+            "verification_status": "review_required",
+            "author_inference": "本稿の結論は、人物配置の変化である。",
+        }]
+        context["proofreading_adoption"] = {
+            "citation_realization": {"evidence_uses_available": True}
+        }
     result = case.worker._manuscript_render_evidence_footnotes_v29(
         claimed, context
     ).context
 
+    if actual_none:
+        report = result["evidence_footnote_render_report"]
+        assert report["footnote_count"] == report["recovered_lineage_evidence_count"] == 0
+        assert report["citation_lineage_binding_count"] == 0
+        assert report["unresolved_footnote_binding_count"] == 0
+        assert "本稿の結論は、人物配置の変化である。" in result["proposed_html"]
+        return
     assert result["evidence_footnote_render_report"]["footnote_count"] == 1
     assert result["evidence_footnote_render_report"][
         "recovered_lineage_evidence_count"

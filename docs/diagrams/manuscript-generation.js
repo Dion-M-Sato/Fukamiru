@@ -189,7 +189,9 @@
     validate_footnoted_coherence: { model: "GPT-5.6 Sol (gpt-5.6-sol)", effort: "high" },
   };
   const lanes = copySource.lanes.map(lane => lane.id === "submission"
-    ? { ...lane, note: "脚注・参考文献→節ごとの本文改稿→見出し→構造と出典の検証→人間確認" } : lane);
+    ? { ...lane, note: "脚注・参考文献→節ごとの本文改稿→見出し→構造と出典の検証→人間確認" }
+    : lane.id === "japanese" && source.proofreading_profile === "llmjp33b_high"
+      ? { ...lane, note: "原文固定→LLM-jp 33B highの診断と局所修正→独立確認→原文照合と適用" } : lane);
   const nodeById = new Map();
   const nodes = source.nodes.map((current, order) => {
     const copy = copyById.get(current.id);
@@ -212,8 +214,9 @@
       summary: override?.summary || copy?.summary || added?.summary || current.title,
       input: override?.input || copy?.input || added?.input || "",
       output: override?.output || copy?.output || added?.output || "",
-      wave: copy?.wave || "",
-      parallel: copy?.parallel || "",
+      wave: current.handler.startsWith("authoring.llmjp33b_") ? "" : copy?.wave || "",
+      parallel: current.handler.startsWith("authoring.llmjp33b_")
+        ? (current.resource_lane === "local_llm_gpu" ? "設定した並列数で処理（既定1）" : "") : copy?.parallel || "",
     };
     if (!lanes.some(lane => lane.id === node.lane)) throw new Error(`Unassigned lane: ${node.id}`);
     nodeById.set(node.id, node);
@@ -283,12 +286,14 @@
     if (event.target === labelLegend) labelLegend.close();
   });
   function mode(node) {
+    if (node.inference && node.resource_lane === "local_llm_gpu") return "LLAMA.CPP";
     if (node.id === "human_approval") return "HUMAN";
     if (node.id === "submission_package") return "OUTPUT";
     if (node.id.startsWith("join_")) return "CPU BARRIER";
     return { ingestion_cpu: "CPU", codex_remote: "CODEX CLI", local_llm_gpu: "LOCAL LLM" }[node.resource_lane] || node.resource_lane;
   }
   function codexModel(node) {
+    if (node.inference) return node.inference;
     if (node.resource_lane !== "codex_remote") return null;
     return codexModelOverrides[node.id] || { model: "GPT-5.6 Sol (gpt-5.6-sol)", effort: "medium" };
   }

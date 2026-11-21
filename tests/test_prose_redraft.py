@@ -145,6 +145,21 @@ def claimed() -> ClaimedNode:
 
 
 def invoke_fixture(stage, payload, failure=""):
+    if stage == "review_paragraph_transitions_v32":
+        by_id = {p["paragraph_id"]: p for p in payload["paragraphs"]}
+        return {
+            "boundaries": [{
+                "boundary_id": b["boundary_id"],
+                "left_paragraph_id": b["left_paragraph_id"],
+                "right_paragraph_id": b["right_paragraph_id"],
+                "relation": "topic_shift", "carried_term": "", "connective": "",
+                "left_evidence": by_id[b["left_paragraph_id"]]["visible_text"][:20],
+                "right_evidence": by_id[b["right_paragraph_id"]]["visible_text"][:20],
+                "central_term_continuity": True, "connective_appropriate": True,
+                "reason": "話題の移行が明瞭。",
+            } for b in payload["boundaries"]],
+            "paragraphs": [], "meaning_preserved": True, "meaning_reason": "変更なし。",
+        }
     if stage == "classify_quote_provenance_v31":
         return {"judgments": [{
             "paragraph_id": item["paragraph_id"], "literal": item["literal"],
@@ -1111,7 +1126,8 @@ def test_v32_rejects_new_reference_candidate_prose_without_losing_citation(tmp_p
         "introduced_phrases": ["参照候補として"],
         "reason": "改稿が読者向け本文へ作業用語を新たに加えたため元稿を保持しました。",
     }]
-    assert calls == ["compose_body_prose_v31"]
+    assert calls == ["compose_body_prose_v31", "extract_paragraph_meaning_v31",
+                     "review_paragraph_transitions_v32"]
     assert prose.manifest(HTML, {"PROTECTED"}) == prose.manifest(
         revised, {"PROTECTED"}
     )
@@ -1303,8 +1319,58 @@ def test_v32_reader_review_restores_cited_paragraph_that_stops_arguing(tmp_path)
     assert ET.tostring(revised_q) == ET.tostring(original_q)
     assert report["citation_reader_reviews"][0]["rejected_paragraph_ids"] == ["Q"]
     assert report["reverted_reader_candidates"][0]["paragraph_id"] == "Q"
-    assert calls == ["compose_body_prose_v31"]
+    assert calls == ["compose_body_prose_v31", "extract_paragraph_meaning_v31",
+                     "review_paragraph_transitions_v32"]
     assert prose.manifest(html) == prose.manifest(result.context["proposed_html"])
+
+
+def test_v32_verification_note_is_removed_after_reader_review_restores_old_paragraph(tmp_path):
+    runner, _calls = mock_runner(tmp_path)
+    original_invoke = runner._authoring_invoke
+    note = "ただし、原典との対応は未確認である。"
+    html = HTML.replace("作品が置かれる媒体の関係を考える。", note)
+
+    def invoke(*args, **kwargs):
+        result = original_invoke(*args, **kwargs)
+        if kwargs["stage"] == "compose_body_prose_v31":
+            source = next(p for p in kwargs["payload"]["paragraphs"] if p["paragraph_id"] == "Q")
+            row = next(p for p in result["paragraphs"] if p["paragraph_id"] == "Q")
+            row["text_slots"] = list(source["source_text_slots"])
+            row["text_slots"][0] = "比較に使うラマールの"
+        if kwargs["stage"] == "review_reader_prose_v31":
+            for row in result["judgments"]:
+                row["natural_for_reader"] = False
+        if kwargs["stage"] == "extract_paragraph_meaning_v31":
+            assert kwargs["payload"]["purpose"] == "route_verification_notes_to_human_review"
+            for row in result["paragraphs"]:
+                if row["paragraph_id"] == "Q":
+                    row["editorial_only"] = [note]
+        return result
+
+    runner._authoring_invoke = invoke
+    # The final extraction sees the text retained by the preceding editor.
+    result = WorkerRunner._authoring_redraft_body_prose(
+        runner, replace(claimed(), workflow_version="32"),
+        {"proposed_html": html, "human_protected_block_ids": ["PROTECTED"],
+         "authoring_compact_claim_citation_v31": {"S": {
+             "section_id": "S", "citation_anchors": [{
+                 "evidence_id": "theory", "substantive_support_verified": False,
+             }],
+         }}},
+    ).context
+    assert note not in result["proposed_html"]
+    items = result["verification_notes_routed_v32"]
+    assert len(items) == 1
+    assert items[0]["reason"] == note
+    assert items[0] in result["human_review_items"]
+    assert result["prose_redraft_report_v31"]["reverted_reader_candidates"]
+    assert result["final_quality_sha256"] == prose.digest(result["proposed_html"])
+    prose.validate_handoff(result)
+    decision = WorkerRunner._authoring_evaluate_human_revision_requirement(
+        WorkerRunner.__new__(WorkerRunner), replace(claimed(), workflow_version="32"), result,
+    ).context
+    assert decision["human_revision_decision"]["required"] is True
+    assert items[0] in decision["human_review_items"]
 
 
 def test_redraft_continues_with_recorded_fallback_for_ambiguous_or_missing_card(tmp_path):
@@ -1824,7 +1890,8 @@ def test_new_audit_schemas_are_strict_recursively():
         visit(STAGE_SCHEMAS[stage])
 
 
-def test_persisted_fanout_fanin_and_submission_keep_the_exact_redrafted_html(monkeypatch):
+@pytest.mark.parametrize("version", ["31", "32"])
+def test_persisted_fanout_fanin_and_submission_keep_the_exact_redrafted_html(monkeypatch, version):
     from test_worker import WorkerTests
 
     case = WorkerTests()
@@ -1856,7 +1923,7 @@ def test_persisted_fanout_fanin_and_submission_keep_the_exact_redrafted_html(mon
         edges.append(EdgeSpec(source="freeze_final_candidate", target="finalize_authoring"))
         workflow = WorkflowDefinition(
             name="manuscript_generator",
-            version="31",
+            version=version,
             title="Smoke",
             entry_node=ids[0],
             nodes=nodes,
@@ -1864,6 +1931,18 @@ def test_persisted_fanout_fanin_and_submission_keep_the_exact_redrafted_html(mon
         )
         worker.workflow_versions[(workflow.name, workflow.version)] = workflow
         worker.workflows[workflow.name] = workflow
+        # This test intentionally runs only the submission subgraph. The V32
+        # production resolver reconstructs the full graph from each Run's pinned
+        # profile, so inject this exact cutout rather than accidentally scheduling
+        # production nodes outside the test.
+        original_workflow_for = worker._workflow_for
+
+        def isolated_workflow(name, requested_version, *, run_id=None):
+            if (name, requested_version) == (workflow.name, workflow.version):
+                return workflow
+            return original_workflow_for(name, requested_version, run_id=run_id)
+
+        monkeypatch.setattr(worker, "_workflow_for", isolated_workflow)
         specs = {node.id: node for node in workflow.nodes}
         seen = []
 
@@ -1934,7 +2013,7 @@ def test_persisted_fanout_fanin_and_submission_keep_the_exact_redrafted_html(mon
                 RunRepository(connection)
                 .create(
                     workflow_name=workflow.name,
-                    workflow_version="31",
+                    workflow_version=version,
                     entry_node=workflow.entry_node,
                     project_id=None,
                     inputs={"proposed_html": HTML, "human_protected_block_ids": ["PROTECTED"]},

@@ -14,6 +14,39 @@ class MigrationTests(unittest.TestCase):
     def migrations_root(self) -> Path:
         return Path(__file__).resolve().parents[1] / "migrations"
 
+    def test_public_schema_upgrade_preserves_runs_and_applied_checksums(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            legacy = root / "legacy"
+            legacy.mkdir()
+            for migration in (self.migrations_root / "state").glob("*.sql"):
+                if migration.name < "0056_":
+                    shutil.copy2(migration, legacy / migration.name)
+            database = SQLiteDatabase(root / "state.db", legacy)
+            database.migrate()
+            with database.connect() as connection:
+                connection.execute(
+                    "INSERT INTO runs(id,workflow_name,workflow_version,status,input_json,"
+                    "created_at) VALUES ('legacy-run','manuscript_generator','32','completed',"
+                    "'{\"japanese_proofreading_profile\":\"local_v32\"}','now')"
+                )
+                connection.commit()
+                before = dict(connection.execute("SELECT * FROM runs").fetchone())
+                checksums = dict(connection.execute(
+                    "SELECT version,checksum FROM schema_migrations"
+                ).fetchall())
+            current = SQLiteDatabase(root / "state.db", self.migrations_root / "state")
+            self.assertEqual(current.migrate(), [
+                "0056_knowledge_search_reports", "0057_hf_proofreading_jobs",
+            ])
+            with current.connect() as connection:
+                self.assertEqual(dict(connection.execute("SELECT * FROM runs").fetchone()), before)
+                after = dict(connection.execute(
+                    "SELECT version,checksum FROM schema_migrations"
+                ).fetchall())
+                self.assertTrue(checksums.items() <= after.items())
+            self.assertEqual(current.migrate(), [])
+
     def test_recovery_input_migration_preserves_original_job_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -43,7 +76,9 @@ class MigrationTests(unittest.TestCase):
                 current.migrate(), ["0050_pdf_ocr_recovery_inputs", "0051_corpus_sync_skips",
                                     "0052_research_source_handoffs", "0053_review_feedback",
                                     "0054_typed_manuscript_research_sources",
-                                    "0055_manuscript_proofreading_generations"]
+                                    "0055_manuscript_proofreading_generations",
+                                    "0056_knowledge_search_reports",
+                                    "0057_hf_proofreading_jobs"]
             )
             with current.connect() as connection:
                 after = dict(connection.execute("SELECT * FROM pdf_ocr_jobs").fetchone())
@@ -122,10 +157,13 @@ class MigrationTests(unittest.TestCase):
                     "0053_review_feedback",
                     "0054_typed_manuscript_research_sources",
                     "0055_manuscript_proofreading_generations",
+                    "0056_knowledge_search_reports",
+                    "0057_hf_proofreading_jobs",
                 ],
             )
             self.assertEqual(database.migrate(), [])
             required = {
+                "knowledge_search_reports",
                 "review_feedback",
                 "projects",
                 "runs",

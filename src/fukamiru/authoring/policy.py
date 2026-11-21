@@ -20,6 +20,7 @@ AUTHORING_V32_POLICY = {
     "id": "fukamiru-authoring-v32",
     "workflow_version": 32,
     "footnote_marker_placement": "before-comma-and-period",
+    "concept_fit": "contextual-concept-fit-v1",
 }
 
 

@@ -6,7 +6,7 @@ of the shell's current directory. Absolute paths may be set in ignored
 
 | Path | Responsibility | Git |
 | --- | --- | --- |
-| `src`, `ui`, `migrations`, `tools` | Application source | Yes |
+| `src`, `ui`, `migrations`, `scripts` | Application source | Yes |
 | `config/local.example.toml` | Portable example configuration | Yes |
 | `config/local.toml` | Machine-local paths and commands | No |
 | `data/state.db` | Runs, revisions, reviews, claims | No |

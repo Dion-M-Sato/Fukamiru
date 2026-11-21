@@ -71,6 +71,34 @@ def test_schema_for_each_pipeline_stage_is_closed_and_requires_output() -> None:
             _validate_schema({}, schema)
 
 
+def test_source_page_images_are_explicit_cli_attachments_not_prompt_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "fukamiru.authoring.codex.require_codex_cli", lambda *_, **__: _resolved_cli()
+    )
+    _fake_user_home(tmp_path, monkeypatch)
+    image = tmp_path / "source-page.png"
+    image.write_bytes(b"synthetic image fixture; no corpus data")
+    captured = []
+
+    def fake_run(command, **_kwargs):
+        captured.extend(command)
+        Path(command[command.index("-o") + 1]).write_text(
+            json.dumps({"classifications": []}), encoding="utf-8"
+        )
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("fukamiru.authoring.codex.subprocess.run", fake_run)
+    result = CodexAuthoringAdapter(_settings(tmp_path)).generate(
+        "classify_propositions", {"propositions": []}, image_paths=[image]
+    )
+    assert result == {"classifications": []}
+    assert captured[captured.index("--image") + 1] == str(image.resolve())
+    assert captured[-1] == "-"
+
+
 def test_every_sent_stage_schema_meets_codex_strict_object_contract() -> None:
     def inspect(schema: dict, path: str) -> None:
         if schema.get("type") == "object":
@@ -488,8 +516,11 @@ def test_authoring_stage_routing_matches_v30_cost_and_judgement_policy() -> None
         "audit",
     }
     assert {stage for stage, model in STAGE_MODEL.items() if model == "gpt-6-luna"} == (
-        luna_stages
+        luna_stages | {"format_adopted_japanese_v32"}
     )
+    assert STAGE_REASONING_EFFORT["format_adopted_japanese_v32"] == "low"
+    assert STAGE_MODEL["review_japanese_change_scope_v32"] == "gpt-5.6-sol"
+    assert STAGE_REASONING_EFFORT["review_japanese_change_scope_v32"] == "medium"
     assert all(STAGE_REASONING_EFFORT[stage] == "low" for stage in luna_stages)
     assert all(STAGE_MODEL[stage] == "gpt-5.6-sol" for stage in sol_medium_stages)
     assert all(STAGE_REASONING_EFFORT[stage] == "medium" for stage in sol_medium_stages)

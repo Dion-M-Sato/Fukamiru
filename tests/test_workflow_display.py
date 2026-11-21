@@ -13,6 +13,24 @@ from fukamiru.workflow.display import (
 )
 
 
+def test_adoption_diagram_matches_section_once_sol_scope_and_verification_routing():
+    from fukamiru.workflow.templates import authoring_workflow
+
+    workflow = authoring_workflow(proofreading_profile="llmjp33b_adopt")
+    path = Path(__file__).resolve().parents[1] / (
+        "docs/diagrams/manuscript-proofreading-adopt-data.js")
+    data = json.loads(path.read_text(encoding="utf-8").split("= ", 1)[1].rsplit(";", 1)[0])
+    assert [(n["id"], n["handler"], n["resource_lane"]) for n in data["nodes"]] == [
+        (n.id, n.handler, n.resource_lane) for n in workflow.nodes]
+    for node_id in ("review_japanese_sections", "redraft_body_prose"):
+        node = next(n for n in data["nodes"] if n["id"] == node_id)
+        assert node["inference"] == {"model": "gpt-5.6-sol", "effort": "medium"}
+    assert "人間確認へ移す" in data["review_policy"]["redraft_body_prose"]["summary"]
+    assert "原文にない誤記" in data["review_policy"]["review_japanese_sections"]["summary"]
+    assert not any(e["from"] == "review_japanese_sections" and e["condition"] == "failure"
+                   for e in data["edges"])
+
+
 def test_every_current_workflow_node_has_authoritative_japanese_metadata() -> None:
     workflows = _workflow_registry()
     node_ids = {node.id for definition in workflows.values() for node in definition.nodes}
@@ -61,6 +79,30 @@ def test_patch_capability_comes_from_the_current_flow_definition() -> None:
     assert not workflow_supports_proofreading_patches(workflows["translation"])
 
 
+def test_v32_diagram_explains_id_addressed_local_proofreading() -> None:
+    root = Path(__file__).resolve().parents[1] / "docs/diagrams"
+    data = (root / "manuscript-generation-data.js").read_text(encoding="utf-8")
+    payload = json.loads(data.split("= ", 1)[1].rsplit(";", 1)[0])
+    nodes = {node["id"]: node for node in payload["nodes"]}
+    definition = _workflow_registry()["manuscript_generator"]
+    actual = {node.id: node for node in definition.nodes}
+    for node_id in (
+        "generate_proofreading_candidates", "preprocess_proofreading_candidates",
+        "rank_proofreading_candidates", "publish_proofreading_shadow",
+    ):
+        assert nodes[node_id]["title"] == actual[node_id].title
+        assert payload["review_policy"][node_id]["input"]
+        assert payload["review_policy"][node_id]["output"]
+        assert payload["review_policy"][node_id]["purpose"] == workflow_node_metadata(
+            definition, node_id
+        )["function_name_ja"]
+    assert "原文ハッシュ" in payload["review_policy"]["generate_proofreading_candidates"]["summary"]
+    assert "人間確認" in payload["review_policy"]["generate_proofreading_candidates"]["summary"]
+    assert "source.review_policy?.[current.id]" in (
+        root / "manuscript-generation.js"
+    ).read_text(encoding="utf-8")
+
+
 def test_v32_dag_displays_the_complete_current_paragraph_label_catalog() -> None:
     root = Path(__file__).resolve().parents[1]
     data_source = (root / "docs/diagrams/manuscript-generation-data.js").read_text(
@@ -90,6 +132,15 @@ def test_v32_dag_tracks_current_workflow_and_one_pass_prose() -> None:
     )
     payload = json.loads(data_source.split("= ", maxsplit=1)[1].rsplit(";", maxsplit=1)[0])
     workflow = _workflow_registry()["manuscript_generator"]
+    for node_id in (
+        "build_claim_tree", "build_argument_graph", "select_defense_obligations",
+        "lock_section_contracts", "diagnose_japanese_prose", "redraft_japanese_paragraphs",
+        "review_japanese_sections", "redraft_body_prose", "audit_final_findings",
+    ):
+        policy = payload["review_policy"][node_id]
+        assert "概念の意味・対象への適用根拠・論証での役割" in policy["summary"]
+        assert "review_concept_fit_v32、GPT-5.6 Sol medium" in policy["summary"]
+        assert "原典の未確認だけで専門語を除去せず" in policy["summary"]
     assert payload["diagram_version"] == "32"
     assert payload["version"] == workflow.version == "32"
     research = payload["research_policy"]

@@ -56,6 +56,27 @@ parallel_slots = 1
 http_threads = -1
 webui = true
 
+[models.llm_jp_proofreading]
+# Leave empty for managed HF Jobs. A dedicated server must pass the
+# same 33B BF16 / high / context checks.
+path = ""
+endpoint = ""
+server_command = "llama-server"
+context_size = 65536
+parallel_slots = 1
+port = 18095
+reasoning_effort = "high"
+request_timeout_seconds = 1200
+auth_token_env = ""
+
+[hf_proofreading]
+enabled = false
+namespace = ""
+max_minutes = 60
+max_cost_usd = 5.01
+max_hourly_usd = 5.01
+startup_seconds = 600
+
 [retrieval]
 backend = "faiss"
 embedding_model = "BAAI/bge-m3"
@@ -101,6 +122,11 @@ codex_rate_limit_retry_delay_seconds = 30
 codex_rate_limit_cooldown_seconds = 300
 
 [translation]
+# To use current 33B proofreading, select "llmjp33b_adopt" and configure
+# managed HF Jobs or a compatible dedicated backend.
+japanese_proofreading_profile = "local_v32"
+japanese_proofreading_max_output_tokens = 32768
+japanese_proofreading_concurrency = 1
 # Codex CLIで `codex login status` が成功する状態にしてください。
 # Windowsの既定値はCodex Desktop同梱CLIをPATH上の古いCLIより優先して自動解決します。
 # 固定パスを指定する場合も、不在・非対応ならDesktop、PATHの順に検証してfallbackします。

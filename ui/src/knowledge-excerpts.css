@@ -1,0 +1,35 @@
+/* Reuses the existing Fukamiru canvas, type, selection accent and reader. */
+.knowledge-excerpts-search { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
+.knowledge-excerpts-search label { display: grid; gap: 8px; flex: 1 1 180px; min-width: 0; font-size: .85rem; }
+.knowledge-excerpts-search input {
+  width: 100%; min-height: 40px; padding: 8px 12px; border: 1px solid var(--border);
+  border-radius: 3px; background: var(--surface); color: var(--text); font: inherit;
+}
+.knowledge-excerpts-search input:focus-visible { outline: 2px solid var(--attention); outline-offset: 2px; }
+#knowledge-excerpts-status { min-height: 1.8em; overflow-wrap: anywhere; }
+#knowledge-excerpts-list { display: grid; gap: 8px; }
+.knowledge-excerpts-choice {
+  display: grid; gap: 8px; width: 100%; padding: 16px; text-align: left;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-left: 3px solid transparent; cursor: pointer;
+}
+.knowledge-excerpts-choice strong { font-size: 1rem; font-weight: 500; overflow-wrap: anywhere; }
+.knowledge-excerpts-choice span { color: var(--secondary); font-size: .8rem; line-height: 1.6; letter-spacing: .015em; }
+.knowledge-excerpts-choice:hover { background: var(--hover); }
+.knowledge-excerpts-choice.selected { border-left-color: var(--attention); background: var(--hover); }
+.knowledge-excerpts-choice:focus-visible { outline: 2px solid var(--attention); outline-offset: 2px; }
+#knowledge-excerpts-inspector { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.knowledge-excerpts-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.knowledge-excerpts-toolbar strong { flex: 1 1 180px; min-width: 0; font-size: .9rem; font-weight: 500; overflow-wrap: anywhere; }
+.knowledge-excerpts-toolbar .viewer-actions { flex-shrink: 0; }
+#knowledge-excerpts-frame { display: block; width: 100%; flex: 1; min-height: 0; border: 0; }
+@media (max-width: 780px) {
+  .workbench.knowledge-excerpts-open .inspector {
+    display: flex; flex-direction: column; position: fixed;
+    inset: 0 0 var(--status-height) var(--activity-width); width: auto;
+    z-index: 40; background: var(--workspace);
+  }
+  .workbench.knowledge-excerpts-open .inspector-content { flex: 1; min-height: 0; width: 100%; }
+  .knowledge-excerpts-search label { flex-basis: 100%; }
+  .knowledge-excerpts-search button { white-space: normal; text-align: left; }
+}

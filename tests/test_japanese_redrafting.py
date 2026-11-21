@@ -9,7 +9,11 @@ from xml.etree import ElementTree as ET
 import pytest
 
 from fukamiru.authoring.codex import CodexAuthoringAdapter
-from fukamiru.errors import ExternalServiceUnavailable, FukamiruError
+from fukamiru.errors import (
+    ExternalServiceUnavailable,
+    FukamiruError,
+    NonRetryableFukamiruError,
+)
 from fukamiru.revisions import submission_validation
 from fukamiru.revisions.footnote_citations import (
     EvidenceFootnotePlanner,
@@ -157,6 +161,69 @@ def test_section_review_resumes_after_external_failure(tmp_path) -> None:
     assert "佐藤が絵を描いた" in result.context["proposed_html"]
     assert runner.calls.count(("japanese_argument_preservation_v31", "s1")) == 1
     assert runner.calls.count(("japanese_argument_preservation_v31", "s2")) == 1
+
+
+@pytest.mark.parametrize("always_fail", [False, True])
+def test_new_prose_premise_returns_to_paragraph_producer_within_existing_budget(always_fail):
+    html = '<article id="a" lang="ja"><section id="s"><h2 id="h">比較</h2>' \
+           '<p id="p1">ハビトゥスは経験から形成される性向である。</p></section></article>'
+    section = editable_sections(html)[0]
+    prefix = "Concept premise requires upstream claim/contract repair: "
+    findings = [{"unit_id": "/revisions/0/text", "term": "選定標本",
+                 "verdict": "unsupported_premise", "reason": "編集記録は標本化ではない。"}]
+    calls = []
+
+    def invoke(_claimed, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1 or always_fail:
+            raise NonRetryableFukamiruError(prefix + json.dumps(findings))
+        assert "選定標本" in kwargs["payload"]["previous_feedback"][0]
+        return {"revisions": [{"block_id": "p1", "text":
+                               "経験を通じて形成される性向をハビトゥスという。"}]}
+
+    runner = SimpleNamespace(
+        _authoring_invoke=invoke, _raise_if_run_cancelled=lambda *args: None,
+        _authoring_japanese_checked_bridge=lambda *args: {},
+    )
+    context = {"proposed_html": html, "section_contracts": [{"section_id": "s"}],
+               "japanese_redrafting_work": {"sections": [{
+                   "section_id": "s", "base": {**section, "citation_lineage": []},
+                   "diagnoses": [], "feedback": [], "attempts": [],
+                   "accepted": False, "candidate": None,
+               }]}}
+    for _ in range(4 if always_fail else 2):
+        context = WorkerRunner._authoring_redraft_japanese_paragraphs(
+            runner, SimpleNamespace(workflow_version="32"), context,
+        ).context
+        assert context["proposed_html"] == html
+        assert context["section_contracts"] == [{"section_id": "s"}]
+    work = context["japanese_redrafting_work"]["sections"][0]
+    assert work["attempts"][0]["status"] == "upstream_paragraph_repair_required"
+    assert len(calls) == (3 if always_fail else 2)
+    assert len(work["attempts"]) == len(calls)
+    if always_fail:
+        assert work["candidate"] is None
+    else:
+        assert "ハビトゥス" in work["candidate"]["paragraphs"][0]["text"]
+        assert "選定標本" not in work["candidate"]["paragraphs"][0]["text"]
+
+
+@pytest.mark.parametrize("version,message", [
+    ("32", "Concept review invented a basis ID"),
+    ("31", 'Concept premise requires upstream claim/contract repair: [{"term":"bad"}]'),
+])
+def test_prose_feedback_does_not_swallow_identity_errors_or_change_v31(version, message):
+    def invoke(*args, **kwargs):
+        raise NonRetryableFukamiruError(message)
+
+    runner = SimpleNamespace(_authoring_invoke=invoke, _raise_if_run_cancelled=lambda *a: None)
+    context = {"japanese_redrafting_work": {"sections": [{
+        "accepted": False, "attempts": [], "base": {}, "diagnoses": [], "feedback": [],
+    }]}}
+    with pytest.raises(NonRetryableFukamiruError, match=message.split(":")[0]):
+        WorkerRunner._authoring_redraft_japanese_paragraphs(
+            runner, SimpleNamespace(workflow_version=version), context,
+        )
 
 
 def test_redrafting_changes_sentence_structure_but_retains_citation_and_notes() -> None:

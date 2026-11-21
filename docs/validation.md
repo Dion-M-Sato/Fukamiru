@@ -74,3 +74,54 @@ used for these checks.
 The pytest configuration was explicitly checked to import the API and node repository
 from this public checkout rather than the shared environment's editable installation.
 The installed HTTP test dependency continues to emit its existing deprecation warning.
+
+## 0.33.0 — section proofreading and saved research reports (2026-11-21)
+
+The section-once proofreading profile preserves LLM-jp-4.1 33B BF16/high, one request
+per section, frozen HTML/citations/human blocks, Sol's limited scope review and
+Luna's formatting rules. Managed HF Jobs retain exact receipts, completed-result
+reuse, no automatic resubmission of uncertain requests, ownership-bound cleanup
+and time/cost limits. Static equivalence checks covered 16 correction/transport
+modules and 58 Codex execution contracts, including final schemas and model settings.
+
+Saved Knowledge Search reports read source context, verify original-page
+bibliography and independently check claims and exact quotes. Corpus updates retain
+interrupted attempts and expose measured progress. The public HTML preview and
+generic bibliography/recovery contracts remain in use. Examples are independently
+authored fictional cases; personal manuscripts, bibliography collections, live IDs,
+credentials, deployment records and local configuration are excluded.
+
+An embedding build now waits for its resource sampler to finish before returning.
+A sampler stopped during a slow GPU query cannot open a late database connection.
+The deterministic regression rejects the previous short-join behavior. Index/search
+checks retain their original assertions; no cleanup errors or failures are ignored.
+
+Validation also covers:
+
+- Complete Python suite: 2,336 passed, no failures, errors or skips (616.35 seconds,
+  eight workers). The slow-sampler regression and FAISS tests are included.
+- A new minimal Python environment with no HF, OCR SDK, Torch or GiNZA extras:
+  initialization, live loopback health/UI/workflows/search/report-list requests and
+  shutdown passed using empty isolated databases, with no external inference.
+- Upgrade from state schema 0055 to 0057 retains a saved Run and all applied
+  checksums. All 80 previously published SQL files remain byte-identical; 0056 and
+  0057 are appended. Fresh initialization and repeat initialization also pass.
+- All three manuscript profile diagrams and the ingestion/search diagrams reproduce
+  executable contracts. The current section-once graph has 64 nodes and 79 edges.
+- UI syntax/unit checks: 69 passed, no failures or skips. The checked-in npm lockfile
+  reproduces the browser test dependency.
+- Headless Edge: review switching, autosave, concurrent drafts, checkbox-only
+  answers, HTML isolation, upright citation titles, report creation, saved history,
+  error retention, evidence links, HTML download, selection races and mobile closure
+  passed. Desktop and 390px mobile screenshots were inspected.
+- Ruff and Git whitespace checks passed. Publication checks include new untracked
+  source, HF token formats, live HF endpoint literals and forbidden private files.
+- Publication boundary checks passed for 507 source files. Known private identifiers
+  (84) and personal literals were absent. Added material contains none of the 34
+  checked private-collection titles. Private commit history is not a parent of this
+  release. The source archive is built from the reviewed Git tree and checked too.
+
+The environment used Python 3.13.5 and Node.js 24 on Windows. HTTP test dependencies
+emit their deprecation warning. Model replies and external providers are controlled
+fixtures; this release check did not launch paid HF Jobs, send manuscripts to external
+models or certify live GPU/BGE-M3 performance or linguistic quality.

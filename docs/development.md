@@ -31,6 +31,6 @@ Git対象外の `config/local.toml` に記載します。認証情報は環境�
 
 ## 公開前の検査
 
-`python scripts/check_publication.py` は追跡対象、`--archive PATH` はZIP/TARを検査します。
-パス、トークンの既知形式、実行ID形式、履歴を示すファイル名、私用ファイルを検出します。
+`python scripts/check_publication.py` は追跡対象と無視されていない新規ファイル、`--archive PATH` はZIP/TARを検査します。
+パス、HF等のトークンの既知形式、実行ID形式、一時HF接続先、履歴を示すファイル名、私用ファイルを検出します。
 自動検査に加え、文書の本文、例、コミットメッセージと公開名義を人間が確認します。

@@ -1,6 +1,7 @@
-import { ReviewDrafts, reviewPreviewDocument } from "./review-workspace.js?v=20261109-1";
+import { ReviewDrafts, reviewPreviewDocument } from "./review-workspace.js?v=0.33.0";
 import { api } from "./api.js";
 import { corpusDuration, corpusPreflightProgress } from "./corpus-progress.js";
+import { numericProgressSummary, runMeasuredProgress } from "./run-progress.js";
 import {
   argumentProcessLabel,
   patchProcessingState,
@@ -54,7 +55,11 @@ const state = {
   selectedRunId: null,
   events: [],
   problems: [],
-  searchResults: [],
+  searchReports: [],
+  selectedSearchReportId: null,
+  searchReportSelection: 0,
+  searchReportBusy: false,
+  searchReportStatus: "",
   corpus: null,
   corpusIndexProgress: null,
   corpusIndexEvents: [],
@@ -638,17 +643,24 @@ async function renderRagEditor() {
       </form>
       </details>
       <h2>Knowledge Search</h2>
+      <p class="muted">関連する資料の本文を読み、内容を文章で報告します。根拠の引用と、使用した文献の書誌を確認できます。</p>
       <form id="search-form" class="search-row">
-        <input name="q" required placeholder="資料内を検索">
-        <button class="primary-action" type="submit">検索</button>
+        <label class="search-query-field">検索語・調べたいこと
+          <input name="q" required maxlength="1000" placeholder="資料内を検索">
+        </label>
+        <button class="primary-action" type="submit" ${state.searchReportBusy ? "disabled" : ""}>${state.searchReportBusy ? "レポート作成中…" : "検索してレポートを作成"}</button>
       </form>
-      <div id="search-results" class="search-results"><p class="empty-state">検索語を入力してください。</p></div>
+      <p id="search-report-status" role="status" class="muted"></p>
+      <h3>検索レポート</h3>
+      <p class="muted">選択すると右ペインで読めます。最新50件を表示します。</p>
+      <div id="search-results" class="search-results"></div>
     </article>`;
   byId("ingestion-form").addEventListener("submit", startIngestion);
   byId("corpus-sync-form").addEventListener("submit", startCorpusSync);
   byId("search-form").addEventListener("submit", searchKnowledge);
+  renderSearchReports();
   try {
-    await Promise.all([refreshCorpus(), refreshCorpusDirectories()]);
+    await Promise.all([refreshCorpus(), refreshCorpusDirectories(), refreshSearchReports()]);
   } catch (error) {
     addProblem(error.message);
   }
@@ -859,24 +871,108 @@ async function startIngestion(event) {
 
 async function searchKnowledge(event) {
   event.preventDefault();
-  const query = new FormData(event.currentTarget).get("q");
+  if (state.searchReportBusy) return;
+  const query = String(new FormData(event.currentTarget).get("q") || "").trim();
+  if (!query) return;
+  state.searchReportBusy = true;
+  state.searchReportStatus = "関連資料を選び、本文・書誌を確認して報告をまとめています…";
+  renderSearchReports();
   try {
-    const payload = await api(`/api/search?q=${encodeURIComponent(query)}`);
-    state.searchResults = payload.results;
-    const target = byId("search-results");
-    target.innerHTML = payload.results.length ? payload.results.map((result) => {
-      const citation = result.citation || {};
-      const position = citation.start_label || (citation.start_page ? `p. ${citation.start_page}` : "");
-      return `
-        <section class="search-result">
-          <h3>${escapeText(result.title || "Untitled")} <span class="retrieval-badge">${escapeText(result.retrieval || "lexical")}</span></h3>
-          <p>${escapeText(result.text)}</p>
-          <small>${escapeText(result.path || "")}${position ? ` · ${escapeText(position)}` : ""}</small>
-        </section>`;
-    }).join("") : '<p class="empty-state">該当するChunkはありません。</p>';
+    const report = await api("/api/search-reports", {
+      method: "POST", body: JSON.stringify({ query, limit: 100 }),
+    });
+    state.searchReports = [report, ...state.searchReports.filter((item) => item.id !== report.id)].slice(0, 50);
+    state.searchReportStatus = report.result_count
+      ? "レポートを保存しました。一覧から開けます。"
+      : "報告の根拠が不足しています。レポートを開くと確認できなかった点を読めます。";
+    renderSearchReports();
   } catch (error) {
+    state.searchReportStatus = `レポートを作成できませんでした。${error.message}`;
     addProblem(error.message);
+  } finally {
+    state.searchReportBusy = false;
+    renderSearchReports();
   }
+}
+
+async function refreshSearchReports() {
+  const reports = await api("/api/search-reports");
+  state.searchReports = reports;
+  renderSearchReports();
+}
+
+function renderSearchReports() {
+  const target = byId("search-results");
+  if (!target) return;
+  byId("search-report-status").textContent = state.searchReportStatus;
+  const button = byId("search-form").querySelector("button[type='submit']");
+  button.disabled = state.searchReportBusy;
+  button.textContent = state.searchReportBusy ? "レポート作成中…" : "検索してレポートを作成";
+  target.replaceChildren();
+  if (!state.searchReports.length) {
+    target.innerHTML = '<p class="empty-state">まだ検索レポートはありません。検索語を入力して作成してください。</p>';
+  }
+  state.searchReports.forEach((report) => {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = "search-report-choice";
+    choice.classList.toggle("selected", report.id === state.selectedSearchReportId);
+    choice.setAttribute("aria-pressed", String(report.id === state.selectedSearchReportId));
+    choice.setAttribute("aria-controls", "search-report-inspector");
+    const date = new Date(report.created_at).toLocaleString("ja-JP");
+    const title = document.createElement("strong");
+    title.textContent = report.query;
+    const meta = document.createElement("span");
+    meta.textContent = `${date} · ${report.source_count}資料 · ${report.result_count}箇所 · 右ペインで読む`;
+    choice.append(title, meta);
+    choice.addEventListener("click", () => openSearchReport(report.id));
+    target.append(choice);
+  });
+}
+
+async function openSearchReport(id) {
+  const selection = ++state.searchReportSelection;
+  state.selectedSearchReportId = id;
+  closeDraftPreview();
+  setPaneVisibility("right", true);
+  const workbench = document.querySelector(".workbench");
+  workbench.classList.remove("mobile-review-open");
+  workbench.classList.add("search-report-open");
+  byId("inspector-title").textContent = "検索レポート";
+  byId("inspector-default").hidden = true;
+  byId("review-inspector").hidden = true;
+  byId("search-report-inspector").hidden = false;
+  byId("search-report-name").textContent = "レポートを読み込み中…";
+  byId("search-report-export").hidden = true;
+  byId("search-report-frame").srcdoc = reviewPreviewDocument("<p>レポートを読み込み中…</p>");
+  renderSearchReports();
+  try {
+    const report = await api(`/api/search-reports/${encodeURIComponent(id)}`);
+    if (selection !== state.searchReportSelection || state.activity !== "rag") return;
+    byId("search-report-name").textContent = report.title;
+    // srcdoc inherits the host page's base URL. Keep evidence links in the reader.
+    byId("search-report-frame").srcdoc = reviewPreviewDocument(report.canonical_html)
+      .replaceAll('href="#', 'href="about:srcdoc#');
+    byId("search-report-export").href = `/api/search-reports/${encodeURIComponent(id)}/export.html`;
+    byId("search-report-export").hidden = false;
+    byId("search-report-close").focus({ preventScroll: true });
+  } catch (error) {
+    if (selection !== state.searchReportSelection) return;
+    byId("search-report-name").textContent = "レポートを開けませんでした";
+    byId("search-report-frame").srcdoc = reviewPreviewDocument(`<p>${escapeText(error.message)}</p>`);
+  }
+}
+
+function closeSearchReport({ restoreFocus = false } = {}) {
+  state.searchReportSelection += 1;
+  state.selectedSearchReportId = null;
+  document.querySelector(".workbench").classList.remove("search-report-open");
+  byId("search-report-inspector").hidden = true;
+  byId("search-report-frame").srcdoc = "";
+  byId("inspector-default").hidden = false;
+  byId("inspector-title").textContent = "レビュー";
+  renderSearchReports();
+  if (restoreFocus) byId("search-form")?.querySelector("input")?.focus();
 }
 
 function reviewWorkflowLabel(workflowName) {
@@ -1112,6 +1208,7 @@ function editReviewDraft(id, update) {
 }
 
 async function selectReview(review) {
+  closeSearchReport();
   const selection = ++reviewSelectionVersion;
   if (selectedReviewId && selectedReviewId !== review.id
       && reviewDrafts.entries.get(selectedReviewId)?.dirty) {
@@ -1176,7 +1273,7 @@ async function selectReview(review) {
       </div>
       <section id="review-questions" role="tabpanel" aria-labelledby="review-questions-tab">
       ${entry.recovery ? `<details class="review-recovery"><summary>このタブに未保存の回答があります</summary><p>別の画面で更新されているため、自動では上書きしません。</p>${entry.recovery.answers.map((answer) => `<p><strong>${escapeText(packet.questions.find((question) => question.question_id === answer.question_id)?.question || "以前の質問")}</strong><br>${escapeText(answer.answer)}${answer.llm_overreach ? " · LLMの過剰要求である" : ""}</p>`).join("")}<p>${escapeText(entry.recovery.overall_comment)}</p><button id="review-recover-local" class="secondary-action" type="button">未保存の回答を復元して編集</button></details>` : ""}
-        <p class="muted">質問ごとに回答できます。過剰要求の選択だけでも送信できます。</p>
+        <p class="muted">質問ごとに回答を入力して送信します。過剰要求と判断した質問は、回答の代わりにチェックを付けます。</p>
         ${packet.questions.map((question, index) => {
           const answer = answered.get(question.question_id) || {};
           const previous = question.previous_answer;
@@ -1599,7 +1696,7 @@ function renderProjectEditor(message = "") {
   byId("editor-content").innerHTML = `
     <article class="document-view">
       <h1>Projectを登録</h1>
-      <p class="lede">固定の保存先はありません。書き込み可能な任意の絶対PATHを1つのGit repositoryとして初期化します。Documents配下も利用できます。</p>
+      <p class="lede">保存先のフォルダをGitリポジトリとして初期化します。保存先は「ドキュメント」フォルダ内など、書き込み権限のある場所を絶対パスで指定してください。</p>
       ${message ? `<p class="notice">${escapeText(message)}</p>` : ""}
       <form id="project-form" class="form-grid">
         <div class="field full">
@@ -1609,7 +1706,7 @@ function renderProjectEditor(message = "") {
         <div class="field full">
           <label for="project-root">Project root</label>
           <input id="project-root" name="root_path" required placeholder="C:\\Research\\my-project">
-          <small>NTFS上の既存フォルダまたは新規フォルダを指定できます。既存ファイルは削除しません。</small>
+          <small>NTFS上の既存フォルダまたは新しく作るフォルダを指定してください。既存ファイルは削除しません。</small>
         </div>
         ${preflightControl}
         <button class="primary-action" type="submit">Projectを作成・登録</button>
@@ -1769,7 +1866,7 @@ async function preflightProjectPath() {
       body: JSON.stringify({ root_path: rootPath }),
     });
     result.innerHTML = `
-      <p><strong>この保存先を利用できます。</strong></p>
+      <p><strong>この保存先はProjectの保存条件を満たしています。</strong></p>
       <p class="muted">${escapeText(assessment.root_path)} · ${escapeText(assessment.filesystem || "filesystem unknown")} · ${Number(assessment.existing_entries)} existing entries</p>
     `;
   } catch (error) {
@@ -2154,7 +2251,7 @@ function renderReferenceMetadataConfirmation(items, isPending) {
               <label><input type="checkbox" name="is_self_authored" data-label="自著" ${item.is_self_authored === true ? "checked" : ""}>自著</label>
               <label><input type="checkbox" name="is_unpublished" data-label="未刊資料" ${item.is_unpublished === true ? "checked" : ""}>未刊資料</label>
             </div>
-            <p class="muted">両方に該当する場合は両方を選択できます。どちらにも該当しない場合はこの欄では確定せず、改稿コメントで著者・書名または検索条件の修正を指示してください。</p>
+            <p class="muted">自著と未刊資料の両方に該当する場合は、両方にチェックを付けてください。どちらにも該当しない場合はこの欄では確定せず、改稿コメントで著者・書名または検索条件の修正を指示してください。</p>
             <p class="reference-classification-status muted" role="status" aria-live="polite"></p>
           </div>`
         : "";
@@ -2282,7 +2379,7 @@ function renderManuscriptRewriteProposal(proposal) {
           `候補〔${(candidate.authors || []).join("・")}・${candidate.title || ""}・${(candidate.translators || []).join("・") || "訳者未確認"}・${candidate.publisher || "出版社未確認"}・${candidate.year || "年未確認"}・${candidate.volume || "巻次未確認"}・${candidate.url || ""}〕`
         ).join("／"))}</p>
         ${entry.search_completeness?.status === "search_incomplete" ? `<p class="status-warning reference-search-completeness"><strong>${escapeText(entry.search_completeness.display_label || "確認できた候補すべて（網羅性未確認）")}</strong><br>件数制限付き・ページ送りなしの検索結果です。実際に参照した版・巻を確認してください。</p>` : ""}
-        ${usesManifestationSelection ? '<p class="muted reference-selection-help">実際に参照した版・巻を複数選択できます。</p>' : ""}
+        ${usesManifestationSelection ? '<p class="muted reference-selection-help">実際に参照した版・巻をすべて選択してください。</p>' : ""}
         ${entry.candidate_matches.map((candidate, index) => `
           <div class="reference-option-row">
             <label class="reference-option"><input type="${inputType}" name="ref-${escapeText(entry.reference_id)}"
@@ -2357,18 +2454,18 @@ function renderManuscriptRewriteProposal(proposal) {
       ${!bulkApproval && responseContractIncomplete ? `
         <div class="status-warning" id="manuscript-response-contract-warning" role="alert">
           <strong>最終Revisionへ承認できません</strong>
-          <p>必須推論の応答に、1回の欠落補充後も未完了の処理単位があります。Proposalとして確認・手修正できますが、未完了を解消するまで承認は停止されます。</p>
+          <p>必須推論の応答には、欠落を1回補充した後も未完了の処理が残っています。改稿案を確認し、必要に応じて手修正してください。未完了の処理を解消するまで承認は停止されます。</p>
         </div>` : ""}
       ${!bulkApproval && semanticResolutionRequired ? `
         <div class="status-warning" id="manuscript-semantic-resolution-warning" role="alert">
           <strong>意味上の判断が必要です</strong>
-          <p>初出語の意味、引用の論証機能、または主張の因果関係に人間確認が残っています。Proposalとして保存できますが、下の項目ごとに判断を記録するまで最終Revisionの承認は停止されます。HTML手修正だけでは意味判定済みになりません。</p>
+          <p>初出語の意味、引用の論証機能、または主張の因果関係に人間確認が残っています。修正内容は改稿案として保存してください。下の項目ごとに判断を記録するまで最終Revisionの承認は停止されます。HTML手修正だけでは意味判定済みになりません。</p>
         </div>` : ""}
       ${bulkApproval ? "" : renderSemanticReviewAdjudication(semanticReviewItems, isPending)}
       ${!bulkApproval && referenceApprovalRequired ? `
         <div class="status-warning" id="manuscript-reference-approval-warning" role="alert">
           <strong>参考文献の確定が必要です</strong>
-          <p>実際に参照した版・巻・原著／翻訳・訳者、または自著・未刊資料の書誌情報に未確定項目があります。Proposalは確認できますが、書誌確認を終えるまで最終Revisionの承認は停止されます。</p>
+          <p>実際に参照した版・巻・原著／翻訳・訳者、または自著・未刊資料の書誌情報に未確定項目があります。改稿案を確認し、書誌情報を確定してください。書誌確認を終えるまで最終Revisionの承認は停止されます。</p>
         </div>` : ""}
       <p><strong>使用した研究文脈</strong></p>
       ${evidenceMarkup}
@@ -2982,7 +3079,7 @@ function renderWelcome() {
       </nav>
       <section class="home-question" aria-labelledby="workspace-principle-title">
         <header><span id="workspace-principle-title">WORKSPACE PRINCIPLE</span><span class="home-system-state">${escapeText(state.health?.status === "ready" ? "SYSTEM READY" : "CONNECTING")}</span></header>
-        <p>資料・翻訳・原稿を、出典とRun履歴から再現できる研究経路として管理する。</p>
+        <p>資料・翻訳・原稿を出典とRun履歴に結び付けて管理します。</p>
       </section>
       <div class="home-grid">
         <section class="home-card home-runs">
@@ -3094,7 +3191,7 @@ async function refreshLiteratureCandidates() {
       <article class="review-card">
         <h3>${escapeText(candidate.title)}</h3>
         <p class="muted">登録済み · ${escapeText(candidate.provider)} · License ${escapeText(candidate.license_url || "not supplied")}</p>
-        ${candidate.oa_url ? `<button class="secondary-action literature-acquire" data-candidate="${escapeText(candidate.id)}">OA PDFを取得</button>` : '<p class="muted">直接取得できるOA URLはありません。</p>'}
+        ${candidate.oa_url ? `<button class="secondary-action literature-acquire" data-candidate="${escapeText(candidate.id)}">OA PDFを取得</button>` : '<p class="muted">OA PDFの取得先URLがありません。</p>'}
       </article>`).join("");
     target.innerHTML = `
       <h3>未レビュー</h3>${pendingCards || '<p class="muted">未レビュー候補はありません。</p>'}
@@ -3303,7 +3400,7 @@ async function loadAuthoringFolders() {
     });
     selector.disabled = !result.folders.length;
     if (!result.folders.length) {
-      byId("authoring-folder-preview").textContent = "目次.md などを含むフォルダがありません。ノート本文を直接入力できます。";
+      byId("authoring-folder-preview").textContent = "目次.md などを含むフォルダがありません。ノート本文を下の欄に直接入力してください。";
     }
   } catch (error) {
     selector.innerHTML = '<option value="">フォルダを取得できません</option>';
@@ -3484,7 +3581,9 @@ function selectPanel(panel) {
 }
 
 function progressMarkupForRun(item, selected) {
-  const progress = selected ? state.runProgress || item.progress : item.progress;
+  const progress = runMeasuredProgress(item,
+    selected ? state.runProgress || item.progress : item.progress,
+    selected ? state.events : item.events || []);
   const activeNodes = runDisplayNodes(item);
   const terminal = terminalRunProgressState(item, progress);
   if (terminal) {
@@ -3545,15 +3644,13 @@ function progressMarkupForRun(item, selected) {
       <small>対象 ${escapeText(progress.target_count ?? 0)} · 完了 ${escapeText(progress.completed_count ?? 0)} · 再利用 ${escapeText(progress.reused_count ?? 0)} · 未解決 ${escapeText(progress.unresolved_count ?? 0)} · ${escapeText(updateLabel)}10秒ごとに自動更新</small>
     </div>`;
   }
-  if (progress?.total != null) {
-    return `<div class="run-progress">
-      <div><strong>${escapeText(progress.percentage ?? 0)}%</strong> · ${progressLabel} ${escapeText(progress.completed ?? 0)} / ${escapeText(progress.total)}</div>
-      <progress max="100" value="${escapeText(progress.percentage ?? 0)}">${escapeText(progress.percentage ?? 0)}%</progress>
-      <small>${progress.completed_characters != null ? `${escapeText(progress.completed_characters.toLocaleString())} translated characters · ` : ""}${escapeText(updateLabel)}10秒ごとに自動更新</small>
+  const numeric = numericProgressSummary(progress, progress?.kind ? progressLabel : "処理");
+  if (numeric) {
+    return `<div class="run-progress numeric-progress" role="status">
+      <div><strong>${escapeText(numeric.headline)}</strong>${numeric.percentage !== null ? ` · ${escapeText(numeric.percentage)}%` : ""}</div>
+      <progress max="100" aria-label="${escapeText(numeric.title)}" ${numeric.percentage !== null ? `value="${escapeText(numeric.percentage)}"` : ""}></progress>
+      <small>${numeric.details ? `${escapeText(numeric.details)} · ` : ""}${escapeText(updateLabel)}10秒ごとに自動更新</small>
     </div>`;
-  }
-  if (progress?.completed != null) {
-    return `<p class="muted">${escapeText(progress.completed)} batches completed · 総数を計算中 · ${escapeText(updateLabel)}10秒ごとに自動更新</p>`;
   }
   return `<p class="muted">${escapeText(execution.detail)} · ${escapeText(updateLabel)}10秒ごとに自動更新</p>`;
 }
@@ -3892,6 +3989,7 @@ function connectToRun(runId) {
 }
 
 function activateActivity(activity, { remember = true } = {}) {
+  if (state.selectedSearchReportId && activity !== "rag") closeSearchReport();
   state.activity = activity;
   if (activity !== "review") document.querySelector(".workbench").classList.remove("mobile-review-open");
   document.querySelectorAll(".activity-button[data-activity]").forEach((item) => {
@@ -3927,6 +4025,7 @@ function openManuscriptDraftPreview(event) {
 }
 
 function showDraftPreview({ artifactId, title, previewUrl, sourceUrl }) {
+  closeSearchReport();
   state.draftPreview = { artifactId, title, previewUrl, sourceUrl };
   setPaneVisibility("right", true);
   document.querySelector(".workbench").classList.add("draft-docked");
@@ -3966,6 +4065,7 @@ function closeDraftModal() {
 }
 
 function bindDraftViewer() {
+  byId("search-report-close").addEventListener("click", () => closeSearchReport({ restoreFocus: true }));
   byId("draft-close").addEventListener("click", closeDraftPreview);
   byId("draft-expand").addEventListener("click", expandDraftPreview);
   byId("draft-modal-close").addEventListener("click", closeDraftModal);

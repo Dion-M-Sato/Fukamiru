@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fukamiru"
-version = "0.32.1"
+version = "0.33.0"
 description = "Local-first research workflow workbench"
 readme = "README.md"
 license = "GPL-3.0-only"
@@ -22,6 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hf-jobs = ["huggingface-hub>=1.19,<2"]
 japanese = [
   "mecab-python3>=1.0.10,<2",
   "unidic-lite>=1.0.8,<2",

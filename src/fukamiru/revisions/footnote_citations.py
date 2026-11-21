@@ -651,6 +651,10 @@ class EvidenceFootnoteRenderer:
         unresolved: list[str] = []
         changed = False
         for paragraph in root.iter("p"):
+            title_markers = {
+                id(marker) for cite in paragraph.iter("cite") for marker in cite.iter("sup")
+                if (marker.tail or "").startswith("』")
+            }
             for parent in paragraph.iter():
                 for marker in list(parent):
                     if marker.tag != "sup" or not str(marker.get("id") or "").startswith(
@@ -658,6 +662,10 @@ class EvidenceFootnoteRenderer:
                     ):
                         continue
                     tail = marker.tail or ""
+                    # A title-only citation belongs inside its closing bracket.
+                    # It must not migrate to the next clause during later edits.
+                    if id(marker) in title_markers:
+                        continue
                     punctuation = next(
                         (index for index, char in enumerate(tail) if char in _ANCHOR_PUNCTUATION),
                         None,
@@ -797,6 +805,26 @@ class EvidenceFootnoteRenderer:
                         "evidence_ids": list(citation.evidence_ids),
                     }
                 )
+            elif place_before_punctuation and citation.anchor_reference_id:
+                cite = next((c for c in target.iter("cite")
+                             if c.get("data-reference-id") == citation.anchor_reference_id), None)
+                if (cite is not None and marker not in list(cite.iter("sup"))
+                        and "".join(cite.itertext()).strip().startswith("『")
+                        and "".join(cite.itertext()).strip().endswith("』")):
+                    parent = next(p for p in target.iter() if marker in list(p))
+                    siblings = list(parent)
+                    index = siblings.index(marker)
+                    if index:
+                        previous = siblings[index - 1]
+                        previous.tail = (previous.tail or "") + (marker.tail or "")
+                    else:
+                        parent.text = (parent.text or "") + (marker.tail or "")
+                    parent.remove(marker)
+                    marker.tail = None
+                    if not cls._insert_marker_inside_title(cite, marker):
+                        raise FukamiruError("Cannot restore title-bound footnote marker")
+                    edits.append({"operation": "reposition_evidence_footnote_marker",
+                                  "block_id": citation.block_id, "marker_id": marker_id})
             if note is None:
                 note = cls._note_item(
                     note_id,
@@ -1175,6 +1203,11 @@ class EvidenceFootnoteRenderer:
                     "Footnote needs one semantic title tag for reference ID: "
                     + citation.anchor_reference_id
                 )
+            cite = matches[0]
+            # A title-bound note belongs inside the book-title bracket,
+            # whether the title appears alone or beside other works.
+            if cls._insert_marker_inside_title(cite, marker):
+                return
             start_slot = slots.index((matches[0], "tail"))
             start_offset = 0
         else:
@@ -1217,6 +1250,38 @@ class EvidenceFootnoteRenderer:
         cls._append_before_terminal_punctuation(
             paragraph, marker, place_before_punctuation=True
         )
+
+    @staticmethod
+    def _insert_marker_inside_title(cite: ET.Element, marker: ET.Element) -> bool:
+        """Insert before the final Japanese book-title bracket, retaining inline markup."""
+        visible = "".join(cite.itertext()).strip()
+        if not (visible.startswith("『") and visible.endswith("』")):
+            return False
+        slots: list[tuple[ET.Element, str]] = []
+
+        def collect(node: ET.Element) -> None:
+            slots.append((node, "text"))
+            for child in node:
+                collect(child)
+                slots.append((child, "tail"))
+
+        collect(cite)
+        for node, field in reversed(slots):
+            value = getattr(node, field) or ""
+            if not value.strip():
+                continue
+            if not value.rstrip().endswith("』"):
+                return False
+            index = value.rfind("』")
+            setattr(node, field, value[:index])
+            marker.tail = value[index:]
+            if field == "text":
+                node.insert(0, marker)
+            else:
+                parent = next(parent for parent in cite.iter() if node in list(parent))
+                parent.insert(list(parent).index(node) + 1, marker)
+            return True
+        return False
 
     @staticmethod
     def _append_before_terminal_punctuation(

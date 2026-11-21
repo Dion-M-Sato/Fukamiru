@@ -58,14 +58,20 @@ CHECKS = {
     ),
     "private key": re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
     "service token": re.compile(
-        r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{24,})"
+        r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+        r"hf_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|sk-[A-Za-z0-9_-]{24,})"
     ),
+    "live HF endpoint": re.compile(r"https://[0-9a-f]{24}--[0-9]+\.hf\.jobs\b", re.I),
     "old service name": re.compile("research" + r"[_ -]?" + "ai", re.I),
 }
 
 
 def source_files() -> list[tuple[str, bytes]]:
-    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT, capture_output=True)
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+    )
     if tracked.returncode == 0 and (ROOT / ".git").exists():
         paths = [ROOT / name.decode() for name in tracked.stdout.split(b"\0") if name]
     else:

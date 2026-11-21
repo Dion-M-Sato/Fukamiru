@@ -723,13 +723,13 @@ def test_visible_citation_units_rejects_repeated_normalized_source_anchor() -> N
 def test_visible_citation_units_ignores_markdown_note_definition_without_changing_text() -> None:
     evidence = {
         "id": "E-RANCIERE",
-        "title": "感性的なもののパルタージュ――美学と政治",
-        "authors": ["ジャック・ランシエール"],
+        "title": "架空の配置研究――記録と比較",
+        "authors": ["架空著者"],
     }
     text = (
-        "ジャック・ランシエール『感性的なもののパルタージュ――美学と政治』を参照する。"
+        "架空著者『架空の配置研究――記録と比較』を参照する。"
         "[^1] 次の文に進む。\n\n"
-        "[^1]: ジャック・ランシエール『感性的なもののパルタージュ――美学と政治』。"
+        "[^1]: 架空著者『架空の配置研究――記録と比較』。"
     )
 
     placement = EvidenceFootnotePlanner.visible_citation_units(
@@ -738,9 +738,9 @@ def test_visible_citation_units_ignores_markdown_note_definition_without_changin
 
     assert placement is not None
     assert placement["sentence"] == (
-        "ジャック・ランシエール『感性的なもののパルタージュ――美学と政治』を参照する。"
+        "架空著者『架空の配置研究――記録と比較』を参照する。"
     )
-    assert text.endswith("[^1]: ジャック・ランシエール『感性的なもののパルタージュ――美学と政治』。")
+    assert text.endswith("[^1]: 架空著者『架空の配置研究――記録と比較』。")
 
 
 def test_authoring_planner_rejects_paragraph_end_note_stack() -> None:
@@ -803,7 +803,8 @@ def test_authoring_planner_groups_two_sources_into_one_sentence_note() -> None:
     } == {"R-1", "R-2"}
 
 
-def test_semantic_title_tags_anchor_multiple_works_without_overlapping_text_ranges() -> None:
+@pytest.mark.parametrize("nested", [False, True])
+def test_semantic_title_tags_anchor_multiple_works_without_overlapping_text_ranges(nested) -> None:
     html = (
         '<article id="D" lang="ja"><section id="S"><h2 id="H">本文</h2>'
         '<p id="P">比較枠として'
@@ -817,6 +818,8 @@ def test_semantic_title_tags_anchor_multiple_works_without_overlapping_text_rang
         {**EVIDENCE_REFERENCE, "reference_id": "R-2", "title": "第二作",
          "evidence_ids": ["E-2"]},
     ]
+    if nested:
+        html = html.replace("『第一作』", "<em>『第一作』</em>")
     plan = EvidenceFootnotePlanner.plan(
         html,
         applied_edits=[{
@@ -851,9 +854,124 @@ def test_semantic_title_tags_anchor_multiple_works_without_overlapping_text_rang
         item for item in ET.fromstring(v32.html).iter("p") if item.get("id") == "P"
     )
     v32_markers = list(v32_paragraph.iter("sup"))
-    assert [marker.tail or "" for marker in v32_markers] == ["", "。"]
-    assert [cite.tail for cite in v32_paragraph.iter("cite")] == ["と", "を用いる"]
+    assert [marker.tail or "" for marker in v32_markers] == ["』", "』"]
+    assert [cite.tail for cite in v32_paragraph.iter("cite")] == ["と", "を用いる。"]
+    assert all(list(cite.iter("sup")) for cite in v32_paragraph.iter("cite"))
+    aligned, unresolved = EvidenceFootnoteRenderer.align_existing_markers_before_punctuation(
+        v32.html
+    )
+    assert unresolved == ()
+    assert aligned == v32.html
     assert len(v32.citation_event_drafts) == len(rendered.citation_event_drafts)
+    resumed = EvidenceFootnoteRenderer.render(
+        rendered.html, list(plan.citations), place_before_punctuation=True
+    )
+    resumed_p = ET.fromstring(resumed.html).find(".//*[@id='P']")
+    assert [sup.tail for sup in resumed_p.iter("sup")] == ["』", "』"]
+    assert [sup.get("id") for sup in resumed_p.iter("sup")] == [m.get("id") for m in markers]
+    assert len(list(ET.fromstring(resumed.html).iter("li"))) == 2
+
+
+def test_independent_title_mentions_each_keep_their_note_inside_the_title():
+    html = ('<article id="D" lang="ja"><section id="S"><h2 id="H">比較</h2>'
+            '<p id="P">甲<cite data-reference-id="R1">『第一作』</cite>は配置を論じ、'
+            '乙<cite data-reference-id="R2">『第二作』</cite>は受容を論じる。</p>'
+            '</section></article>')
+    citations = [EvidenceFootnote(
+        block_id="P", evidence_ids=("E" + str(i),), anchor_reference_id="R" + str(i),
+        reference={**EVIDENCE_REFERENCE, "reference_id": "R" + str(i),
+                   "title": title, "evidence_ids": ["E" + str(i)]},
+    ) for i, title in [(1, "第一作"), (2, "第二作")]]
+    result = EvidenceFootnoteRenderer.render(html, citations, place_before_punctuation=True)
+    paragraph = ET.fromstring(result.html).find(".//*[@id='P']")
+    assert [marker.tail for marker in paragraph.iter("sup")] == ["』", "』"]
+    assert [cite.tail for cite in paragraph.iter("cite")] == [
+        "は配置を論じ、乙", "は受容を論じる。",
+    ]
+    assert all(len(list(cite.iter("sup"))) == 1 for cite in paragraph.iter("cite"))
+
+
+@pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize("tail", ["は、記録が残る条件を問う。", "は配置を論じる。", "を読む"])
+def test_single_title_note_survives_prose_edits_and_rerendering(nested, tail):
+    from fukamiru.revisions import prose_redraft as prose
+
+    title = "架空の配置研究 : 記録と比較"
+    title_html = f"『{title}』"
+    if nested:
+        title_html = f"<em>{title_html}</em>"
+    html = (
+        '<article id="D" lang="ja"><section id="S"><h2 id="H">政治</h2>'
+        f'<p id="P">架空著者の<cite data-reference-id="R1">{title_html}</cite>'
+        f'{tail}</p></section></article>'
+    )
+    reference = {**EVIDENCE_REFERENCE, "reference_id": "R1", "title": title,
+                 "evidence_ids": ["E1"]}
+    plan = EvidenceFootnotePlanner.plan(
+        html,
+        applied_edits=[{"operation": "replace_text", "block_id": "P", "evidence_ids": ["E1"]}],
+        evidence_context=[{"id": "E1"}], reference_entries=[reference],
+        require_distinct_anchors=True,
+    )
+    assert plan.citations[0].anchor_reference_id == "R1"
+    result = EvidenceFootnoteRenderer.render(
+        html, list(plan.citations), place_before_punctuation=True
+    )
+    paragraph = ET.fromstring(result.html).find(".//*[@id='P']")
+    cite = next(paragraph.iter("cite"))
+    marker = next(cite.iter("sup"))
+    assert marker.tail == "』" and cite.tail == tail
+    assert prose.reader_paragraph_text(result.html)["P"] == "架空著者の『" + title + "』" + tail
+
+    # Both V31's title-adjacent position and V32's older comma position can be
+    # rendered again without changing the number, note, text or reference binding.
+    legacy = EvidenceFootnoteRenderer.render(html, list(plan.citations))
+    if "。" in tail:
+        legacy_html, unresolved = (
+            EvidenceFootnoteRenderer.align_existing_markers_before_punctuation(legacy.html)
+        )
+        assert unresolved == ()
+    else:
+        legacy_html = legacy.html
+    resumed = EvidenceFootnoteRenderer.render(
+        legacy_html, list(plan.citations), place_before_punctuation=True
+    )
+    resumed_p = ET.fromstring(resumed.html).find(".//*[@id='P']")
+    resumed_marker = next(next(resumed_p.iter("cite")).iter("sup"))
+    assert resumed_marker.get("id") == marker.get("id")
+    assert "".join(resumed_marker.itertext()) == "1"
+    assert resumed_marker.tail == "』"
+    assert len(list(ET.fromstring(resumed.html).iter("li"))) == 1
+    assert prose.reader_paragraph_text(resumed.html)["P"] == prose.reader_paragraph_text(html)["P"]
+
+    edit = prose.inventory(result.html)[0]
+    edit["text_slots"][-1] = tail + "見える位置と発言の関係を考える。"
+    revised, _ = prose.apply_edits(result.html, [edit])
+    aligned, unresolved = (
+        EvidenceFootnoteRenderer.align_existing_markers_before_punctuation(revised)
+    )
+    assert unresolved == () and aligned == revised
+    assert prose.manifest(result.html) == prose.manifest(aligned)
+    assert EvidenceFootnoteRenderer.render(
+        resumed.html, list(plan.citations), place_before_punctuation=True
+    ).html == resumed.html
+
+
+def test_non_book_title_tag_keeps_its_clause_anchor():
+    html = ('<article id="D" lang="ja"><section id="S"><h2 id="H">比較</h2>'
+            '<p id="P"><cite data-reference-id="R1">論文の題</cite>は配置を論じる。</p>'
+            '</section></article>')
+    citation = EvidenceFootnote(
+        block_id="P", evidence_ids=("E1",), anchor_reference_id="R1",
+        reference={**EVIDENCE_REFERENCE, "reference_id": "R1", "evidence_ids": ["E1"]},
+    )
+    result = EvidenceFootnoteRenderer.render(html, [citation], place_before_punctuation=True)
+    paragraph = ET.fromstring(result.html).find(".//*[@id='P']")
+    assert next(paragraph.iter("sup")).tail == "。"
+    assert not list(next(paragraph.iter("cite")).iter("sup"))
+    assert EvidenceFootnoteRenderer.render(
+        result.html, [citation], place_before_punctuation=True
+    ).html == result.html
 
 
 def test_authoring_planner_allows_one_note_per_comma_clause() -> None:

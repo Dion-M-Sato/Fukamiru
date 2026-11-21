@@ -202,11 +202,20 @@ def mentioned_creative_works(html: str, cards: list[dict[str, Any]]) -> list[dic
 def titles_in_argument_prose(html: str) -> list[str]:
     root = ET.fromstring(html)
     titles: list[str] = []
+
+    def text(node: ET.Element) -> str:
+        if node.tag == "sup" and (
+            node.get("data-citation-generated") == "evidence-footnote-v1"
+            or any(anchor.get("role") == "doc-noteref" for anchor in node.iter("a"))
+        ):
+            return ""
+        return (node.text or "") + "".join(text(child) + (child.tail or "") for child in node)
+
     for section in root.iter("section"):
         if section.get("data-reference-section") or section.get("data-citation-section"):
             continue
         for paragraph in section.iter("p"):
-            titles.extend(quoted_titles("".join(paragraph.itertext())))
+            titles.extend(quoted_titles(text(paragraph)))
     return list(dict.fromkeys(titles))
 
 

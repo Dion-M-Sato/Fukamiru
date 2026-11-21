@@ -35,7 +35,8 @@ class Spec:
         return cls(**value)
 
 
-def export(*, version: str = "31", workflow_name: str | None = None) -> dict:
+def export(*, version: str = "31", workflow_name: str | None = None,
+           proofreading_profile: str = "local_v32") -> dict:
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"), filename=str(SOURCE))
     namespace = {
         "NodeSpec": Spec,
@@ -51,7 +52,9 @@ def export(*, version: str = "31", workflow_name: str | None = None) -> dict:
     workflow = (
         namespace[workflow_name]()
         if workflow_name
-        else namespace["authoring_workflow"](version=version)
+        else namespace["authoring_workflow"](
+            version=version, proofreading_profile=proofreading_profile
+        )
     )
     nodes = [
         {
@@ -95,7 +98,8 @@ def export(*, version: str = "31", workflow_name: str | None = None) -> dict:
                 "不明判定は引き続き停止します。本文の根拠の扱いを固定資料の支援役割と照合し、"
                 "不一致を対象節の修正指示へ返します。資料の能力や検証状態は昇格させません。"
                 "保存済みの監査がある抜粋不一致、人名の頭文字直後の文切れ、書誌情報を事実の"
-                "根拠にできない同一入力の停止に限り、履歴を保持して原因ごとに一度再開できます。"
+                "根拠にできない同一入力の停止に限り、再開要求を受けて履歴を保持し、"
+                "原因ごとに一度だけ処理を再開します。"
                 "起草・改稿の厳格な根拠検査を通過した時点で、その本文世代の根拠対応を固定します。"
             ),
             "input": "固定した節契約・資料、原文と文章候補、監査の抜粋・判断",
@@ -148,7 +152,8 @@ def export(*, version: str = "31", workflow_name: str | None = None) -> dict:
                 "資料・場面が未確認という留保は、不確実性の指摘を残して後段の本文修正へ渡し、"
                 "残る場合は段落を示した人間レビューとします。内部作業ラベルとは区別し、"
                 "未確認を検証済みへ変更しません。この留保だけで停止した旧版は、"
-                "根拠対応と脚注計画が有効な場合に、元入力のまま一度再開できます。"
+                "根拠対応と脚注計画が有効な場合に、再開要求を受けて、"
+                "元入力のまま一度だけ処理を再開します。"
             ),
             "input": "厳格な起草の根拠対応、全段落の引用有無、校正後の本文と保存済み結果",
             "output": "引用なしを含む段落対応、余分な投影の限定復旧と元入力の履歴",

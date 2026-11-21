@@ -9,6 +9,40 @@
 
 [hidden] { display: none !important; }
 
+.search-query-field { display: grid; gap: 8px; flex: 1; min-width: 0; font-size: .85rem; }
+.search-row:has(.search-query-field) { align-items: end; flex-wrap: wrap; }
+.search-query-field input { width: 100%; }
+#search-report-status { min-height: 1.8em; overflow-wrap: anywhere; }
+.search-report-choice {
+  display: grid; gap: 8px; width: 100%; padding: 16px; text-align: left;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-left: 3px solid transparent; cursor: pointer;
+}
+.search-report-choice strong { font-size: 1rem; font-weight: 500; overflow-wrap: anywhere; }
+.search-report-choice span { color: var(--secondary); font-size: .8rem; line-height: 1.6; letter-spacing: .015em; }
+.search-report-choice:hover { background: var(--hover); }
+.search-report-choice.selected { border-left-color: var(--attention); background: var(--hover); }
+.search-report-choice:focus-visible { outline: 2px solid var(--attention); outline-offset: 2px; }
+#search-report-inspector { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.search-report-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.search-report-toolbar strong { flex: 1 1 180px; font-weight: 500; font-size: .9rem; overflow-wrap: anywhere; min-width: 0; }
+.search-report-toolbar .viewer-actions { flex-shrink: 0; }
+#search-report-frame { display: block; width: 100%; flex: 1; min-height: 0; border: 0; }
+
+@media (max-width: 780px) {
+  .workbench.search-report-open .inspector {
+    display: flex; flex-direction: column; position: fixed;
+    inset: 0 0 var(--status-height) var(--activity-width); width: auto;
+    z-index: 40; background: var(--workspace);
+  }
+  .workbench.search-report-open .inspector-content { flex: 1; min-height: 0; width: 100%; }
+  .search-query-field { flex-basis: 100%; }
+  .search-row:has(.search-query-field) button { white-space: normal; text-align: left; }
+}
+
 .review-queue-list { display: grid; gap: 6px; margin: 20px 0; }
 .review-queue-choice { display: grid; gap: 6px; width: 100%; padding: 14px 16px; text-align: left; background: var(--surface); border: 1px solid var(--border); cursor: pointer; }
 .review-queue-choice strong { font-weight: 500; overflow-wrap: anywhere; }

@@ -400,7 +400,7 @@ def test_editorial_separation_cannot_drop_required_citation() -> None:
         )
 
 
-def test_reader_brief_projects_mixed_reference_status_as_reader_note() -> None:
+def test_reader_brief_keeps_analysis_and_excludes_reference_verification_status() -> None:
     mixed = {"node_type": "evidence", "text": (
         "著者メモは家具・台所を生活細部として列挙し、"
         "ホワイト『メタヒストリー』を、歴史記述と物語形式の関係を考える"
@@ -408,7 +408,9 @@ def test_reader_brief_projects_mixed_reference_status_as_reader_note() -> None:
         "当該適用の妥当性は未検証である。"
     )}
     text = WorkerRunner._authoring_reader_evidence_text_v31(mixed)
-    assert "家具・台所" in text and "未検証" in text
+    assert "家具・台所" in text and "歴史記述と物語形式" in text
+    assert "未検証" not in text and "参照候補" not in text
+    assert "未検証" in mixed["text"]
     assert "著者メモ" not in text and "書誌同一性" not in text
 
 

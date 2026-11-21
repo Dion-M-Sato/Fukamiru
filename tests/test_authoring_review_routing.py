@@ -659,6 +659,73 @@ def test_worker_classifier_freezes_complete_audit_and_keeps_review_out_of_repair
     assert saved["review_items"] == result["human_review_items"]
 
 
+@pytest.mark.parametrize("target_type,target", [("claim", "c35"), ("sentence", "S2-P01-S01")])
+def test_classifier_resolves_object_membership_and_preserves_original_target(
+    monkeypatch, target_type, target,
+):
+    monkeypatch.setattr(
+        "fukamiru.worker.runner.AuthoringRepository",
+        lambda _state: SimpleNamespace(save_evidence_state=lambda **_kwargs: None),
+    )
+    runner = object.__new__(WorkerRunner)
+    runner.databases = SimpleNamespace(state=object())
+    context = {
+        "proposed_html": "<article>本文</article>",
+        "section_contracts": [{"section_id": "S1", "claim_ids": ["c1"]},
+                              {"section_id": "S2", "claim_ids": ["c35"]}],
+        "draft_sections": [{"section_id": "S2", "claim_ids": ["c35"],
+                            "paragraphs": [{"sentence_ids": ["S2-P01-S01"]}]}],
+        "audit_findings": [{"object_type": target_type, "object_id": target,
+                            "code": "redundancy", "severity": "major",
+                            "message": "c35の証拠対応だけを修正する。",
+                            "repair_scope": "local_section"}],
+    }
+    result = runner._authoring_classify_audit_findings(
+        SimpleNamespace(run_id="run-1"), context,
+    ).context
+    finding, = result["auto_repair_findings"]
+    assert finding["section_id"] == "S2"
+    assert target in finding["target_ids"]
+    assert finding["repair_operations"][0]["target_sentence_ids"] == ["S2-P01-S01"]
+    assert result["clean_audited_section_ids"] == ["S1"]
+    assert not result["human_review_findings"]
+
+
+def test_claim_finding_expands_all_actual_sections_and_rejects_unknown_claim():
+    from fukamiru.authoring.evidence_contracts import localize_audit_finding
+
+    raw = {"id": "F1", "object_type": "claim", "object_id": "c1", "message": "指摘"}
+    contracts = [{"section_id": "S1", "claim_ids": ["c1"]},
+                 {"section_id": "S2", "claim_ids": ["c1"]}]
+    findings = localize_audit_finding(raw, section_contracts=contracts, draft_sections=[])
+    assert [item["section_id"] for item in findings] == ["S1", "S2"]
+    assert len({item["finding_id"] for item in findings}) == 2
+    assert all(item["object_id"] == "c1" and item["message"] == "指摘" for item in findings)
+    with pytest.raises(ValueError, match="has no section"):
+        localize_audit_finding({**raw, "object_id": "unknown"},
+                              section_contracts=contracts, draft_sections=[])
+
+
+def test_targetless_document_finding_keeps_existing_document_scope():
+    from fukamiru.authoring.evidence_contracts import (
+        AuditBundle,
+        adapt_audit_finding,
+        localize_audit_finding,
+    )
+
+    # The native audit expansion uses object_type=claim when neither ID list is set.
+    raw = {"object_type": "claim", "object_id": None, "message": "文書全体の確認。",
+           "code": "other", "repair_scope": "user_input"}
+    localized = localize_audit_finding(raw, section_contracts=[{"section_id": "S1"}],
+                                     draft_sections=[])
+    assert localized == [raw]
+    finding = adapt_audit_finding(localized[0], manuscript_hash="a" * 64, ordinal=1)
+    bundle = AuditBundle(manuscript_hash="a" * 64, audited_section_ids=("S1",),
+                         findings=(finding,))
+    assert bundle.findings[0].section_id is None
+    assert bundle.findings[0].disposition == "human_review"
+
+
 def test_worker_classifier_records_blocking_reference_defect(monkeypatch):
     fixed = build_fixed_assets({"evidence_context": []})
     monkeypatch.setattr(

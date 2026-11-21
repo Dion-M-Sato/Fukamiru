@@ -87,6 +87,9 @@ class ModelSettings:
     parallel_slots: int = 1
     http_threads: int = -1
     webui: bool = True
+    endpoint: str = ""
+    reasoning_effort: str = ""
+    auth_token_env: str = ""
 
     @classmethod
     def from_mapping(cls, values: dict[str, Any]) -> ModelSettings:
@@ -106,6 +109,9 @@ class ModelSettings:
             parallel_slots=int(values.get("parallel_slots", 1)),
             http_threads=int(values.get("http_threads", -1)),
             webui=bool(values.get("webui", True)),
+            endpoint=str(values.get("endpoint", "")).rstrip("/"),
+            reasoning_effort=str(values.get("reasoning_effort", "")),
+            auth_token_env=str(values.get("auth_token_env", "")),
         )
 
 
@@ -184,6 +190,9 @@ class TranslationSettings:
     post_edit_max_edits_per_chunk: int = 2
     post_edit_max_repair_rounds: int = 3
     manuscript_polish_max_output_tokens: int = 1536
+    japanese_proofreading_profile: str = "local_v32"
+    japanese_proofreading_max_output_tokens: int = 32768
+    japanese_proofreading_concurrency: int = 1
     manuscript_polish_max_edits_per_chunk: int = 6
     manuscript_candidate_count: int = 6
     manuscript_candidate_top_k: int = 3
@@ -223,6 +232,18 @@ class OCRSettings:
 
 
 @dataclass(frozen=True)
+class HFProofreadingSettings:
+    enabled: bool = False
+    namespace: str = ""
+    flavor: str = "h200"
+    image: str = "python:3.13"
+    max_minutes: int = 60
+    max_cost_usd: float = 5.01
+    max_hourly_usd: float = 5.01
+    startup_seconds: int = 600
+
+
+@dataclass(frozen=True)
 class Settings:
     server: ServerSettings
     paths: PathSettings
@@ -235,6 +256,8 @@ class Settings:
     translation: TranslationSettings
     ocr: OCRSettings
     config_path: Path
+    llm_jp_proofreading: ModelSettings | None = None
+    hf_proofreading: HFProofreadingSettings = HFProofreadingSettings()
 
 
 def load_settings(
@@ -253,6 +276,7 @@ def load_settings(
     worker = merged.get("worker", {})
     translation = merged.get("translation", {})
     ocr = merged.get("ocr", {})
+    hf = merged.get("hf_proofreading", {})
     path_values = {
         key: _resolve_configured_path(str(value), repository_root) if value else value
         for key, value in merged.get("paths", {}).items()
@@ -275,6 +299,15 @@ def load_settings(
         ),
         paths=paths,
         llm_jp=ModelSettings.from_mapping(models.get("llm_jp", {})),
+        llm_jp_proofreading=ModelSettings.from_mapping(models.get("llm_jp_proofreading", {})),
+        hf_proofreading=HFProofreadingSettings(
+            enabled=bool(hf.get("enabled", False)), namespace=str(hf.get("namespace", "")),
+            flavor=str(hf.get("flavor", "h200")), image=str(hf.get("image", "python:3.13")),
+            max_minutes=int(hf.get("max_minutes", 60)),
+            max_cost_usd=float(hf.get("max_cost_usd", 5.01)),
+            max_hourly_usd=float(hf.get("max_hourly_usd", 5.01)),
+            startup_seconds=int(hf.get("startup_seconds", 600)),
+        ),
         llm_jp_base=ModelSettings.from_mapping(models.get("llm_jp_base", {})),
         gaperon=ModelSettings.from_mapping(models.get("gaperon", {})),
         events=EventSettings(
@@ -323,9 +356,7 @@ def load_settings(
             poll_interval_seconds=float(worker.get("poll_interval_seconds", 0.25)),
             lease_seconds=float(worker.get("lease_seconds", 90.0)),
             heartbeat_seconds=float(worker.get("heartbeat_seconds", 15.0)),
-            ingestion_cpu_max_concurrency=int(
-                worker.get("ingestion_cpu_max_concurrency", 3)
-            ),
+            ingestion_cpu_max_concurrency=int(worker.get("ingestion_cpu_max_concurrency", 3)),
             codex_max_concurrency=int(worker.get("codex_max_concurrency", 5)),
             codex_checkpoint_seed_prefix_characters=int(
                 worker.get("codex_checkpoint_seed_prefix_characters", 8192)
@@ -334,32 +365,18 @@ def load_settings(
             codex_reference_inference_concurrency=int(
                 worker.get("codex_reference_inference_concurrency", 2)
             ),
-            codex_enumeration_concurrency=int(
-                worker.get("codex_enumeration_concurrency", 5)
-            ),
-            codex_paragraph_concurrency=int(
-                worker.get("codex_paragraph_concurrency", 5)
-            ),
+            codex_enumeration_concurrency=int(worker.get("codex_enumeration_concurrency", 5)),
+            codex_paragraph_concurrency=int(worker.get("codex_paragraph_concurrency", 5)),
             codex_rewrite_concurrency=int(worker.get("codex_rewrite_concurrency", 5)),
-            codex_predicate_concurrency=int(
-                worker.get("codex_predicate_concurrency", 5)
-            ),
-            codex_coherence_concurrency=int(
-                worker.get("codex_coherence_concurrency", 3)
-            ),
+            codex_predicate_concurrency=int(worker.get("codex_predicate_concurrency", 5)),
+            codex_coherence_concurrency=int(worker.get("codex_coherence_concurrency", 3)),
             codex_discourse_concurrency=int(worker.get("codex_discourse_concurrency", 5)),
             codex_japanese_analysis_concurrency=int(
                 worker.get("codex_japanese_analysis_concurrency", 5)
             ),
-            evidence_search_concurrency=int(
-                worker.get("evidence_search_concurrency", 5)
-            ),
-            reference_lookup_concurrency=int(
-                worker.get("reference_lookup_concurrency", 5)
-            ),
-            codex_translation_yield_batches=int(
-                worker.get("codex_translation_yield_batches", 20)
-            ),
+            evidence_search_concurrency=int(worker.get("evidence_search_concurrency", 5)),
+            reference_lookup_concurrency=int(worker.get("reference_lookup_concurrency", 5)),
+            codex_translation_yield_batches=int(worker.get("codex_translation_yield_batches", 20)),
             local_llm_yield_chunks=int(worker.get("local_llm_yield_chunks", 20)),
             codex_rate_limit_retry_delay_seconds=float(
                 worker.get("codex_rate_limit_retry_delay_seconds", 30.0)
@@ -382,36 +399,29 @@ def load_settings(
                 translation.get("manuscript_structure_timeout_grace_seconds", 30)
             ),
             batch_characters=int(translation.get("batch_characters", 12000)),
-            post_edit_lines_per_chunk=int(
-                translation.get("post_edit_lines_per_chunk", 5)
-            ),
-            post_edit_max_characters=int(
-                translation.get("post_edit_max_characters", 400)
-            ),
-            post_edit_context_characters=int(
-                translation.get("post_edit_context_characters", 600)
-            ),
-            post_edit_max_output_tokens=int(
-                translation.get("post_edit_max_output_tokens", 512)
-            ),
-            post_edit_max_edits_per_chunk=int(
-                translation.get("post_edit_max_edits_per_chunk", 2)
-            ),
-            post_edit_max_repair_rounds=int(
-                translation.get("post_edit_max_repair_rounds", 3)
-            ),
+            post_edit_lines_per_chunk=int(translation.get("post_edit_lines_per_chunk", 5)),
+            post_edit_max_characters=int(translation.get("post_edit_max_characters", 400)),
+            post_edit_context_characters=int(translation.get("post_edit_context_characters", 600)),
+            post_edit_max_output_tokens=int(translation.get("post_edit_max_output_tokens", 512)),
+            post_edit_max_edits_per_chunk=int(translation.get("post_edit_max_edits_per_chunk", 2)),
+            post_edit_max_repair_rounds=int(translation.get("post_edit_max_repair_rounds", 3)),
             manuscript_polish_max_output_tokens=int(
                 translation.get("manuscript_polish_max_output_tokens", 1536)
+            ),
+            japanese_proofreading_profile=str(
+                translation.get("japanese_proofreading_profile", "local_v32")
+            ),
+            japanese_proofreading_max_output_tokens=int(
+                translation.get("japanese_proofreading_max_output_tokens", 32768)
+            ),
+            japanese_proofreading_concurrency=int(
+                translation.get("japanese_proofreading_concurrency", 1)
             ),
             manuscript_polish_max_edits_per_chunk=int(
                 translation.get("manuscript_polish_max_edits_per_chunk", 6)
             ),
-            manuscript_candidate_count=int(
-                translation.get("manuscript_candidate_count", 6)
-            ),
-            manuscript_candidate_top_k=int(
-                translation.get("manuscript_candidate_top_k", 3)
-            ),
+            manuscript_candidate_count=int(translation.get("manuscript_candidate_count", 6)),
+            manuscript_candidate_top_k=int(translation.get("manuscript_candidate_top_k", 3)),
             manuscript_candidate_generation_attempts=int(
                 translation.get("manuscript_candidate_generation_attempts", 2)
             ),
@@ -427,24 +437,16 @@ def load_settings(
             manuscript_candidate_beam_width=int(
                 translation.get("manuscript_candidate_beam_width", 24)
             ),
-            academic_research_enabled=bool(
-                translation.get("academic_research_enabled", True)
-            ),
-            academic_research_online=bool(
-                translation.get("academic_research_online", True)
-            ),
+            academic_research_enabled=bool(translation.get("academic_research_enabled", True)),
+            academic_research_online=bool(translation.get("academic_research_online", True)),
             academic_research_local_results=int(
                 translation.get("academic_research_local_results", 3)
             ),
             academic_research_provider_results=int(
                 translation.get("academic_research_provider_results", 3)
             ),
-            academic_research_sources=int(
-                translation.get("academic_research_sources", 3)
-            ),
-            academic_research_max_queries=int(
-                translation.get("academic_research_max_queries", 8)
-            ),
+            academic_research_sources=int(translation.get("academic_research_sources", 3)),
+            academic_research_max_queries=int(translation.get("academic_research_max_queries", 8)),
             academic_research_timeout_seconds=int(
                 translation.get("academic_research_timeout_seconds", 45)
             ),
@@ -482,6 +484,22 @@ def load_settings(
 
 def validate_settings(settings: Settings, *, require_models: bool = False) -> list[str]:
     problems: list[str] = []
+    if settings.hf_proofreading.enabled:
+        import math
+        import re
+
+        hf = settings.hf_proofreading
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,95}", hf.namespace):
+            problems.append("hf_proofreading.namespace is required")
+        if hf.flavor != "h200" or hf.image != "python:3.13":
+            problems.append("hf_proofreading requires the tested h200 / python:3.13 runtime")
+        if not 2 <= hf.max_minutes <= 180 or not 30 <= hf.startup_seconds <= 900:
+            problems.append("hf_proofreading duration limits are invalid")
+        if not all(math.isfinite(v) and 0 < v <= 20
+                   for v in (hf.max_cost_usd, hf.max_hourly_usd)):
+            problems.append("hf_proofreading requires finite positive USD limits (maximum 20)")
+        if settings.translation.japanese_proofreading_profile != "llmjp33b_adopt":
+            problems.append("hf_proofreading requires the section-once llmjp33b_adopt profile")
     if settings.server.host not in {"127.0.0.1", "localhost", "::1"}:
         problems.append("server.host must remain loopback-only in the local-first profile")
     if not 1 <= settings.server.port <= 65535:

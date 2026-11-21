@@ -28,6 +28,28 @@ parallel_slots = 1
 http_threads = -1
 webui = true
 
+[models.llm_jp_proofreading]
+path = ""
+endpoint = ""
+server_command = "llama-server"
+context_size = 65536
+parallel_slots = 1
+port = 18085
+reasoning_effort = "high"
+request_timeout_seconds = 1200
+# Set a private endpoint / local model path and optional token environment in config/local.toml.
+auth_token_env = ""
+
+[hf_proofreading]
+enabled = false
+namespace = ""
+flavor = "h200"
+image = "python:3.13"
+max_minutes = 60
+max_cost_usd = 5.01
+max_hourly_usd = 5.01
+startup_seconds = 600
+
 [models.gaperon]
 path = ""
 server_command = "llama-server"
@@ -132,6 +154,9 @@ codex_rate_limit_retry_delay_seconds = 30
 codex_rate_limit_cooldown_seconds = 300
 
 [translation]
+japanese_proofreading_profile = "local_v32"
+japanese_proofreading_max_output_tokens = 32768
+japanese_proofreading_concurrency = 1
 provider = "codex"
 codex_command = "codex"
 # Manuscript inference uses GPT-5.6 Sol; stage-specific reasoning effort is unchanged.

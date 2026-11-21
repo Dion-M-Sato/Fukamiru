@@ -244,7 +244,7 @@ class PDFLayoutTests(unittest.TestCase):
                     path.with_name("another.pdf"), source_asset_id="asset-layout", prepared=prepared
                 )
 
-    def test_ready_pdf_reuses_complete_artifacts_and_rebuilds_a_missing_artifact(self) -> None:
+    def test_ready_pdf_preserves_legacy_content_and_missing_derived_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "layout.pdf"
@@ -267,6 +267,23 @@ class PDFLayoutTests(unittest.TestCase):
             with DatabasePair.from_settings(settings).knowledge.connect() as connection:
                 service = IngestionService(connection, settings)
                 first = service.ingest_path(str(path), source_language="en")
+                connection.execute(
+                    "UPDATE pdf_layout_documents SET analyzer_version='pdf-display-layout-v1'"
+                )
+                connection.execute(
+                    "UPDATE ocr_text_revisions SET layer='human_corrected_ocr',created_by='human'"
+                )
+                protected = connection.execute(
+                    "UPDATE ocr_blocks SET is_human_protected=1"
+                ).rowcount
+                self.assertGreater(protected, 0)
+                connection.commit()
+                tables = ("document_units", "pages", "source_spans", "chunks",
+                          "ocr_text_revisions", "ocr_blocks", "pdf_layout_documents")
+                before = {
+                    table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                    for table in tables
+                }
                 with patch.object(
                     PDFLayoutAnalyzer, "prepare", side_effect=AssertionError("unnecessary parse")
                 ):
@@ -274,9 +291,27 @@ class PDFLayoutTests(unittest.TestCase):
                 self.assertTrue(reused["reused"])
                 self.assertEqual(reused["document_unit_id"], first["document_unit_id"])
                 Path(first["structured_html_path"]).unlink()
-                rebuilt = service.ingest_path(str(path), source_language="en")
-                self.assertFalse(rebuilt["reused"])
-                self.assertEqual(rebuilt["chunk_count"], first["chunk_count"])
+                with patch.object(
+                    PDFLayoutAnalyzer, "prepare", side_effect=AssertionError("unnecessary parse")
+                ):
+                    reused = service.ingest_path(str(path), source_language="en")
+                self.assertTrue(reused["reused"])
+                self.assertEqual(reused["document_unit_id"], first["document_unit_id"])
+                self.assertEqual(before, {
+                    table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+                    for table in tables
+                })
+                connection.execute("DELETE FROM pdf_layout_documents")
+                connection.commit()
+                with patch.object(
+                    PDFLayoutAnalyzer, "prepare", side_effect=AssertionError("unnecessary parse")
+                ):
+                    reused = service.ingest_path(str(path), source_language="en")
+                self.assertTrue(reused["reused"])
+                for table in tables[:-1]:
+                    self.assertEqual(before[table], [
+                        tuple(row) for row in connection.execute(f"SELECT * FROM {table}")
+                    ])
 
     def test_layout_roles_survive_into_normalized_ocr_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

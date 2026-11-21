@@ -1467,7 +1467,9 @@ def manuscript_rewrite_workflow() -> WorkflowDefinition:
     return manuscript_rewrite_workflow_v29()
 
 
-def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
+def authoring_workflow(
+    *, version: str = "32", proofreading_profile: str = "local_v32"
+) -> WorkflowDefinition:
     """One Fukamiru-native DAG from source note through submission review."""
 
     if version not in {"30", "31", "32"}:
@@ -1659,7 +1661,9 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
             ),
             *((authoring_node(
                 "redraft_body_prose",
-                "Edit Japanese prose once per section within fixed HTML text slots",
+                ("Edit prose, route verification notes, and check paragraph terms and connectives"
+                 if version == "32" else
+                 "Edit Japanese prose once per section within fixed HTML text slots"),
                 "codex_remote",
                 1,
             ),) if structure_aware else ()),
@@ -1724,6 +1728,11 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
     nodes_by_id = {**{node_id: v29_nodes[node_id] for node_id in reused_ids}, **custom}
     if version == "32":
         for node_id, title in {
+            "extract_proofreading_sentences": "Freeze proofreading IDs and original hashes",
+            "generate_proofreading_candidates": "Generate ID-addressed local llm-jp corrections",
+            "preprocess_proofreading_candidates": "Validate local edits and original style",
+            "rank_proofreading_candidates": "Select source-addressed local corrections",
+            "publish_proofreading_shadow": "Apply verified local corrections and preserve HTML IDs",
             "plan_research_queries": "Plan compact multilingual literature queries",
             "resolve_manuscript_evidence": (
                 "Reuse local RAG passages before external literature discovery"
@@ -1737,7 +1746,10 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
     if structure_aware:
         node = nodes_by_id["generate_proofreading_candidates"]
         nodes_by_id["generate_proofreading_candidates"] = node.model_copy(update={
-            "title": "Generate three independent llm-jp proofreading samples",
+            "title": (
+                "Generate ID-addressed local llm-jp corrections" if version == "32"
+                else "Generate three independent llm-jp proofreading samples"
+            ),
         })
     ordered_ids = [
         "prepare_note",
@@ -1963,6 +1975,17 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
         EdgeSpec(source=source, target=target, condition=condition)
         for source, target, condition in edge_rows
     ]
+    if version == "32":
+        for node_id, title in {
+            "build_claim_tree": "Build claim hierarchy and check concept fit",
+            "build_argument_graph": "Build argument graph and check concept premises",
+            "select_defense_obligations": "Select material defenses and check concept fit",
+            "lock_section_contracts": "Validate concepts and lock section contracts",
+            "diagnose_japanese_prose": "Diagnose Japanese wording and concept applicability",
+            "review_japanese_sections": "Review Japanese sections and concept applicability",
+            "audit_final_findings": "Audit final findings and contextual concept fit",
+        }.items():
+            nodes_by_id[node_id] = nodes_by_id[node_id].model_copy(update={"title": title})
     sequence = [
         nodes_by_id[node_id].model_copy(
             update={
@@ -1972,7 +1995,7 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
         )
         for node_id in ordered_ids
     ]
-    return WorkflowDefinition(
+    definition = WorkflowDefinition(
         name="authoring" if version == "30" else "manuscript_generator",
         version=version,
         title="Manuscript Generator",
@@ -1980,6 +2003,87 @@ def authoring_workflow(*, version: str = "32") -> WorkflowDefinition:
         nodes=sequence,
         edges=edges,
     )
+    if proofreading_profile == "local_v32":
+        return definition
+    if version != "32" or proofreading_profile not in {"llmjp33b_high", "llmjp33b_adopt"}:
+        raise ValueError("Unsupported authoring proofreading profile")
+    return _contextual_proofreading_workflow(
+        definition, adopt=proofreading_profile == "llmjp33b_adopt")
+
+
+def _contextual_proofreading_workflow(
+    definition: WorkflowDefinition, *, adopt: bool = False,
+) -> WorkflowDefinition:
+    removed = {
+        "extract_proofreading_sentences",
+        "generate_proofreading_candidates",
+        "preprocess_proofreading_candidates",
+        "screen_proofreading_with_luna",
+        "rank_proofreading_candidates",
+        "select_proofreading_candidates",
+        "publish_proofreading_shadow",
+    }
+    replacements = {
+        "diagnose_japanese_prose": (
+            "prepare",
+            "Freeze source IDs and section proofreading context",
+            "ingestion_cpu",
+        ),
+        "redraft_japanese_paragraphs": (
+            "propose",
+            "Diagnose and propose contextual Japanese corrections with LLM-jp 33B BF16 high",
+            "local_llm_gpu",
+        ),
+        "review_japanese_sections": (
+            "review",
+            "Independently review Japanese corrections with LLM-jp 33B BF16 high",
+            "local_llm_gpu",
+        ),
+        "japanese_surface_quality_gate": (
+            "apply",
+            "Apply source-verified, reviewed corrections and preserve protected HTML",
+            "ingestion_cpu",
+        ),
+        "reconcile_candidate_context_after_proofreading": (
+            "reconcile", "Reconcile context and review citation predicates with LLM-jp 33B high",
+            "local_llm_gpu",
+        ),
+    }
+    if adopt:
+        replacements.update({
+            "diagnose_japanese_prose": (
+                "prepare_sections", "Freeze proofreading input by section", "ingestion_cpu"),
+            "redraft_japanese_paragraphs": (
+                "correct_sections_once", "Proofread sections once; stop owned GPU",
+                "local_llm_gpu"),
+            "review_japanese_sections": (
+                "validate_sections", "Validate source and review scope with Sol", "codex_remote"),
+            "japanese_surface_quality_gate": (
+                "apply", "Apply existing style rules with Luna; retain prose", "codex_remote"),
+            "reconcile_candidate_context_after_proofreading": (
+                "reconcile", "Reconcile frozen IDs and citations; retain prose", "ingestion_cpu"),
+            "redraft_body_prose": (
+                "finish", "Retain adopted prose and route verification notes", "codex_remote"),
+        })
+    nodes = []
+    for node in definition.nodes:
+        if node.id in removed:
+            continue
+        if node.id in replacements:
+            operation, title, lane = replacements[node.id]
+            prefix = "authoring.llmjp_adopt_" if adopt else "authoring.llmjp33b_"
+            node = node.model_copy(update={"handler": prefix + operation,
+                                           "title": title, "resource_lane": lane,
+                                           "retry": RetryPolicy(max_attempts=1)})
+        nodes.append(node)
+    edges = [e for e in definition.edges if e.source not in removed and e.target not in removed
+             and not (e.source == "review_japanese_sections" and e.condition == "failure")]
+    edges.append(
+        EdgeSpec(source="review_japanese_sections", target="japanese_surface_quality_gate")
+    )
+    return WorkflowDefinition(name=definition.name, version=definition.version,
+                              title="Manuscript Generator / LLM-jp 33B high proofreading",
+                              entry_node=definition.entry_node, nodes=nodes, edges=edges)
 
 
 def authoring_workflow_v30() -> WorkflowDefinition:

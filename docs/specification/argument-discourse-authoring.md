@@ -1,5 +1,8 @@
 # Argument and discourse authoring
 
+The section-once 33B profile follows [the current Japanese proofreading contract](japanese-proofreading.md).
+The earlier local-profile drafting and review rules below remain available for persisted workflows.
+
 This specification defines the proposal authoring workflow: a raw note becomes a reviewed first paper Revision through an explicit, auditable plan and a human-approved proposal. The note is source material. Its headings, section boundaries, and ordering do not constrain the new paper.
 
 ## End-to-end flow
@@ -67,10 +70,52 @@ the candidate continues to the final reference audit and cannot receive a clean
 citation result. Deterministic section-contract and sentence-binding errors after
 bounded local repair are non-retryable with the same input.
 V32 retains the V31 evidence and citation scope. Its generated footnote numbers
+attach to each explicitly referenced book title immediately before its closing
+`』`, whether it appears alone, beside other titles, or in a separate clause.
+Existing note IDs, numbers and reference bindings survive rendering again,
+including relocation of older title-bound numbers outside their book titles.
+Other citations retain their clause anchors.
+Primary-work title extraction ignores generated footnote labels and semantic
+note references, so a number inside `』` cannot become part of a work title or
+create an additional bibliography entry. Actual numbers in titles remain intact.
+After the final prose edit and all paragraph rollbacks, V32 extracts verification
+status and missing-source caveats as verbatim editable-text excerpts. It deletes
+only those excerpts and records their original wording with paragraph and section
+IDs in human review. Extraction failures stop the node. Substantive scope,
+conditions, negation and counterevidence remain in the argument. Locked human
+blocks, inline citations, quotations and footnotes remain protected. A paragraph
+containing only an editorial note retains its stable empty DOM node.
+The reader review receives prose without superscript footnote labels.
+After verification-note removal, V32 independently reviews every adjacent body
+paragraph pair, including section boundaries and protected paragraphs as context.
+It separately judges whether the central concept is carried into the next
+paragraph and whether an appropriate discourse relation is apparent at its start.
+An additive `も` or `だけでなく` inside a sentence does not alone establish an
+adequate paragraph-level addition cue. Planning, drafting and final composition
+preserve necessary central-term repetition and select context-appropriate cues.
+The reviewer may propose one repair of the next paragraph's opening sentence;
+later sentences, protected text, titles, quotations and notes remain fixed.
+All boundaries are rechecked against the exact candidate after any repair,
+including the other side of an edited paragraph and boundaries across batches.
+An independent comparison must preserve claims, scope, conditions, negation,
+certainty and attribution. A failed meaning comparison rejects the repair and
+retains an addressed human-review item; it never adds a prose caveat or new
+argument to bridge a gap. Invalid coverage or fabricated excerpts stop before
+checkpointing. The report is bound to the final prose hash and survives submission.
+An unapproved V32 manuscript can also branch through
+`POST /api/runs/{run_id}/restart-authoring-from-footnotes`. The new Run reuses
+the latest successful footnote node's immutable input, including the authored
+paragraphs, evidence and human feedback. It discards downstream render, audit,
+proposal and artifact results, records source Run/node IDs and content hashes,
+and executes the normal tail from footnote rendering to a new pending proposal.
+The source Run and its saved reviews remain intact. Active Runs, incomplete
+handoffs and papers already confirmed as a Revision cannot use this boundary.
+For citations anchored to prose rather than a book-title tag, numbers
 precede a following comma or period in the manuscript text, including Japanese
 and Western punctuation variants. After `redraft_body_prose`, V32 moves only
-editable prose within the same paragraph so generated numbers remain immediately
-before punctuation. A paragraph whose rewritten text cannot support that position
+editable prose within the same paragraph so those generated numbers remain immediately
+before punctuation; title-bound numbers remain inside their closing `』`.
+A paragraph whose rewritten text cannot support that position
 retains its pre-redraft text for human review. Persisted V31 Runs keep their original
 renderer policy and workflow definition.
 When a citation evidence node is shared across claims, V31 selects its required
@@ -121,3 +166,90 @@ Show missing information, model assumptions, affected claims and sections, candi
 - Yang, Kevin et al. (2023), “DOC: Improving Long Story Coherence With Detailed Outline Control.”
 - Liang, Yi et al. (2024), “Integrating Planning into Single-Turn Long-Form Text Generation.”
 - Wang, Qianyue et al. (2025), “Generating Long-form Story Using Dynamic Hierarchical Outlining with Memory-Enhancement.”
+
+## V32 contextual concept fit
+
+Claim hierarchy, argument graph, defenses and section locking check a concept's
+local meaning, applicability and argumentative role before accepting it. The
+independent `review_concept_fit_v32` stage distinguishes appropriate concepts,
+wording defects, unsupported premises and unresolved applicability. A generated
+contract or an occurrence in the memo does not establish applicability. Defined
+authorial analysis is permitted without a verbatim source conclusion. Internal
+research gaps and rival hypotheses retain their planning role.
+
+Source-verification status is independent of conceptual applicability. An
+unverified attribution or an `added_theory` label alone cannot invalidate a
+reasoned interpretation. The compact review material retains the original
+theory-attribution permissions. Necessary named concepts remain protected even
+when their explanation needs wording repair. Removed verification closures are
+saved once, with their original text and target claim, in human review items;
+they do not become qualifications in the article. Reviews preserve the author's
+contrast, negation target and causal direction rather than neutralizing a value
+word or metaphor solely because of its register.
+
+Internal evidence cards carry an explicit `evidence_record` role. Their accurate
+verification boundaries are valid ledger information, not reader-facing caveats;
+the same status sentence in an article remains a wording defect. This role does
+not exempt concepts, research methods or object classifications from inspection.
+An isolated V32 argument failure limited to wording in saved evidence cards can
+be replayed once after correcting the role contract. The replay retains accepted
+checkpoints and records the previous failure; it does not accept a failed review
+or promote evidence to verified status.
+The same explicit replay endpoint also permits a first-repair regression when
+the native result, repair edits and recheck agree with the saved failure and no
+second repair has been attempted. The second repair must satisfy the full gate.
+Rejected reviews are never accepted as checkpoints: their archived response can
+only reconstruct a probe for an exactly matching, previously accepted corrected
+review. A probe miss cannot invoke a model; the normal fresh review path follows.
+Report versions retain earlier failure files instead of overwriting them.
+Text units use canonical object-key traversal, so checkpoint serialization cannot
+change their order. Matching an older saved recheck requires the same unique unit
+IDs and failure contents; its historical object-key order is not a semantic change.
+
+The review also covers adoption reasons. An internal research gap or a question
+does not authorize a new research method, corpus or validation obligation.
+Editorial omissions do not make a qualitative reading a sampling study, nor do
+they justify silently restricting it to the works retained in a draft. Original
+research designs and explicit object conditions remain valid scope evidence.
+
+Quoted phrases are exposed as explicit review candidates. Each candidate must
+receive its own verdict, so a verdict about a bundled "analysis framework" cannot
+silently omit the individual theory names. Candidate extraction does not establish
+applicability or require preservation; unsupported concepts can still be rejected.
+
+A failed upstream candidate receives at most two `repair_concept_fit_v32` calls,
+each followed by independent reinspection against the candidate and memo spans.
+This permits correction of a new premise introduced by the first repair. An
+unchanged candidate or a return to a rejected candidate stops immediately. Prose
+wording gets one local repair; a premise defect still returns to the plan.
+Repair edits address exact text fields; IDs, hierarchy, citation bindings and
+other JSON structure cannot change. Only optional term/qualification list items
+can be removed. Appropriate necessary specialist terms are protected through
+repair; omitted specialist concepts in prose are checked against the source.
+Unresolved premises cannot be hidden by a synonym, an unbounded claim or a new
+verification caveat. Reports retain candidates, verdicts, repairs and hashes.
+
+Japanese diagnosis and section review additionally check applicability with
+original source material. Paragraph and final prose generation can repair wording;
+a premise defect requires an upstream claim/contract repair. The frozen final
+candidate receives a separate concept audit; its hash and any unresolved findings
+are retained for human review. This partial audit does not certify every semantic
+or source-verification requirement.
+
+The frozen concept audit uses reader paragraph text with superscript `doc-noteref`
+labels excluded. Original title digits, years and prose numbers remain intact.
+Citation HTML and title-only note placement before `』` are unchanged.
+
+`POST /api/runs/{run_id}/restart-authoring-from-final-audit` creates a new Run
+from the saved completed `audit_final_findings` input. It requires an inactive
+V32 source, an unapproved target, valid prose handoff and frozen HTML identical
+to the source Run's saved final HTML. It preserves the source history and all
+upstream findings, and executes only final audit, judgement and submission.
+The old audit and review report remain with the source Run. The new audit creates
+its own review report and pending proposal without revising or approving prose.
+
+`POST /api/runs/{run_id}/restart-authoring-from-argument` branches a V32 Run from
+its completed post-evidence argument input. It rechecks inherited claims, creates
+a new plan, rebuilds the source-preservation branch with a fresh join generation,
+and regenerates the argument, contracts and prose using saved evidence. Original
+Runs, answers and artifacts are preserved. No approval is submitted automatically.

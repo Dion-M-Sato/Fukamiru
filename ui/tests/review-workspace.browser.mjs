@@ -18,7 +18,7 @@ const packets = new Map(reviews.map((review) => [review.id, {
     question: "展示の範囲について、補足できる資料や情報はありますか？", reason: "対象の範囲を確認する", excerpt: "仮想展示の配置を比較する。".repeat(review.id === "a" ? 30 : 1),
     context_note: "展示の範囲を確認したいという指摘です。", excerpt_scope: review.id === "b" ? "planning" : "paragraph" }],
   answers: [], overall_comment: "", submitted_revision: null,
-  preview_html: '<article id="paper"><h1>仮想展示</h1><p>仮想展示の配置を比較する。</p><script>window.parent.bad=true</script><img src="https://example.invalid/track"></article>',
+  preview_html: '<article id="paper"><h1>仮想展示</h1><p>仮想展示の配置を比較する。<cite>架空の展示記録</cite>を参照する。</p><script>window.parent.bad=true</script><img src="https://example.invalid/track"></article>',
 }]));
 const submissions = [];
 const errors = [];
@@ -65,7 +65,8 @@ const server = http.createServer(async (request, response) => {
   } catch (error) { errors.push(String(error)); response.statusCode = 500; response.end(String(error)); }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "msedge" });
+const browser = await chromium.launch({ headless: true, args: ["--disable-gpu"],
+  channel: process.env.PLAYWRIGHT_CHANNEL || "msedge" });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const externalRequests = [];
@@ -94,7 +95,7 @@ try {
   await page.waitForFunction(() => document.getElementById("review-save-status").textContent.includes("送信しました"));
   assert(submissions.at(-1).answers[0].llm_overreach);
   assert.equal(submissions.at(-1).answers[0].answer, "");
-  await page.screenshot({ path: path.join(output, "questions-desktop.png") });
+  await page.screenshot({ path: path.join(output, "questions-desktop.png"), animations: "disabled" });
   await page.reload();
   assert(await page.locator("[data-question-overreach='q-a']").isChecked());
   await page.locator("#review-overall-comment").fill("保存前の再読込でも保持するコメント");
@@ -114,10 +115,11 @@ try {
   assert.equal(await page.locator("#review-html-frame").getAttribute("sandbox"), "");
   const preview = page.frameLocator("#review-html-frame");
   await preview.locator("h1").waitFor();
+  assert.equal(await preview.locator("cite").evaluate((node) => getComputedStyle(node).fontStyle), "normal");
   assert.equal(await preview.locator("script,img").count(), 0);
   assert.equal(await page.evaluate(() => window.bad), undefined);
   assert.deepEqual(externalRequests, []);
-  await page.screenshot({ path: path.join(output, "html-desktop.png") });
+  await page.screenshot({ path: path.join(output, "html-desktop.png"), animations: "disabled" });
   await page.locator("#review-html-expand").click();
   assert(await page.locator("#review-html-modal").isVisible());
   await page.keyboard.press("Escape");
@@ -128,7 +130,7 @@ try {
   assert.equal(await page.locator("#review-questions-tab").getAttribute("aria-selected"), "true");
   await page.setViewportSize({ width: 390, height: 844 });
   assert(await page.locator("#review-inspector").isVisible());
-  await page.screenshot({ path: path.join(output, "questions-mobile.png") });
+  await page.screenshot({ path: path.join(output, "questions-mobile.png"), animations: "disabled" });
   await page.locator("#review-pane-back").click();
   assert(!await page.locator("#inspector-pane").isVisible());
   assert(await page.locator("#review-overall-comment").isVisible());

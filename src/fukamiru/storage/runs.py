@@ -10,6 +10,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from fukamiru.authoring.evidence_contracts import (
@@ -18,6 +19,7 @@ from fukamiru.authoring.evidence_contracts import (
     compile_draft_evidence,
     draft_source_use_constraints,
     evidence_use_identity_hash,
+    localize_audit_finding,
     project_argument_evidence_sources,
     refresh_draft_evidence_identity,
 )
@@ -51,6 +53,159 @@ def utc_now() -> str:
 
 def _json_dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _v32_prose_basis_typo_is_replayable(
+    candidate: dict[str, Any], review: dict[str, Any],
+    context: dict[str, Any], payload: dict[str, Any],
+) -> bool:
+    """Prove a namespace typo before permitting one diagnostic-guidance replay.
+
+    The shadow mapping is only an eligibility check. It is never an accepted
+    audit response: the worker must obtain and validate a new model judgment.
+    """
+    from fukamiru.authoring import concept_fit as fit
+
+    material = fit.material(context, payload)
+    allowed = fit._ids(material)
+    shadow = json.loads(_json_dump(review))
+    corrections: dict[str, str] = {}
+    for row in shadow.get("units") or []:
+        for concept in row.get("concepts") or []:
+            for unknown in set(concept.get("basis_ids") or []) - allowed:
+                match = re.fullmatch(r"b\d{2}-(.+)", unknown)
+                matches = [known for known in allowed if match and re.fullmatch(
+                    r"b\d{2}-" + re.escape(match[1]), known,
+                )]
+                if len(matches) != 1:
+                    return False
+                corrections[unknown] = matches[0]
+            concept["basis_ids"] = [corrections.get(item, item)
+                                    for item in concept.get("basis_ids") or []]
+    if not corrections or len(corrections) > 8:
+        return False
+    try:
+        fit.validate_review({
+            "units": fit.units(candidate), "material": material,
+            "source_units": fit.units({"paragraphs": [
+                {"text": row.get("text") or ""} for row in payload.get("paragraphs") or []
+            ]}),
+        }, shadow)
+    except (FukamiruError, ValueError, TypeError, KeyError):
+        return False
+    return True
+
+
+def _v32_internal_evidence_review_is_repairable(
+    message: str, candidate: dict[str, Any],
+) -> bool:
+    prefix = "Concept repair remains unresolved: "
+    if not message.startswith(prefix):
+        return False
+    try:
+        findings = json.loads(message[len(prefix):])
+        if not isinstance(findings, list) or not findings:
+            return False
+        for finding in findings:
+            match = re.fullmatch(r"/nodes/(\d+)/text", finding.get("unit_id", ""))
+            if (match is None or finding.get("verdict") != "wording"
+                    or finding.get("must_keep") is not False):
+                return False
+            node = candidate["nodes"][int(match[1])]
+            if (node.get("node_type") != "evidence" or not finding.get("term")
+                    or finding["term"] not in node.get("text", "")):
+                return False
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        return False
+    return True
+
+
+def _v32_bounded_concept_repair_is_replayable(
+    message: str, native: dict[str, Any], changes: dict[str, Any], review: dict[str, Any],
+) -> bool:
+    from fukamiru.authoring import concept_fit
+
+    prefix = "Concept repair remains unresolved: "
+    if not message.startswith(prefix):
+        return False
+    try:
+        errors = json.loads(message[len(prefix):])
+        candidate = concept_fit.apply_repairs(native, changes["edits"])
+        exposed = concept_fit.units(candidate)
+        observed = [r["unit_id"] for r in review["units"]]
+        expected = {r["unit_id"] for r in exposed}
+        if (not errors or errors != concept_fit.findings(review)
+                or len(observed) != len(expected) or set(observed) != expected):
+            return False
+        by_id = {r["unit_id"]: r["text"] for r in exposed}
+        return all(error.get("term") and error["term"] in by_id[error["unit_id"]]
+                   for error in errors)
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError, FukamiruError):
+        return False
+
+
+def _v32_basis_identity_review_is_replayable(
+    message: str, native: dict[str, Any], review: dict[str, Any], context: dict[str, Any],
+) -> bool:
+    """Authorize revalidation, never acceptance, of a formerly unrecognized identity."""
+    from fukamiru.authoring import concept_fit
+
+    if message != "Concept review invented a basis ID":
+        return False
+    try:
+        coverage = context.get("evidence_coverage") or []
+        supported = {
+            row[key] for row in coverage for key in ("finding_id", "obligation_id")
+            if isinstance(row.get(key), str) and row[key]
+        }
+        referenced = {value for row in review["units"] for term in row["concepts"]
+                      for value in term["basis_ids"]}
+        if not supported.intersection(referenced):
+            return False
+        supplied = concept_fit.material(context, {"evidence": {"coverage": coverage}})
+        concept_fit.validate_review({"units": concept_fit.units(native), "material": supplied},
+                                    review)
+    except (ValueError, TypeError, KeyError, AttributeError, FukamiruError):
+        return False
+    return True
+
+
+def _v32_verification_routing_is_replayable(
+    native: dict[str, Any], changes: dict[str, Any],
+    earlier_changes: dict[str, Any] | None = None,
+) -> bool:
+    from fukamiru.authoring import concept_fit
+
+    try:
+        first = native
+        if earlier_changes:
+            first = concept_fit.apply_repairs(native, earlier_changes["edits"])
+        repaired = concept_fit.apply_repairs(first, changes["edits"])
+        routed = concept_fit.route_removed_verification({}, native, repaired)
+        return any(re.search(
+            r"外部根拠.{0,30}未解決|比較命題.{0,30}確定せず", row["reason"],
+        ) for row in routed)
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError, FukamiruError):
+        return False
+
+
+def _v32_field_anchor_review_is_replayable(
+    message: str, native: dict[str, Any], review: dict[str, Any], context: dict[str, Any],
+) -> bool:
+    from fukamiru.authoring import concept_fit
+
+    if not message.startswith("Concept review excerpt is not in its field:"):
+        return False
+    try:
+        supplied = concept_fit.material(context, {"evidence": {
+            "coverage": context.get("evidence_coverage") or [],
+        }})
+        errors = concept_fit.field_anchor_errors(
+            {"units": concept_fit.units(native), "material": supplied}, review,
+        )
+        return bool(errors) and next(iter(errors.values())) == message
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError, FukamiruError):
+        return False
 
 
 def _v31_stale_draft_evidence_baseline(
@@ -725,10 +880,17 @@ class RunRepository:
         entry_node: str = "lock_section_contracts",
         resource_lane: str = "codex_remote",
     ) -> AuthoringContractRestartCreated:
-        """Branch from the latest matching pre-contract snapshot of the same version."""
+        """Branch from a saved contract or post-evidence argument boundary."""
+
+        if entry_node not in {"lock_section_contracts", "build_argument_graph"}:
+            raise FukamiruError("Unsupported authoring restart boundary")
+        argument_restart = entry_node == "build_argument_graph"
+        if argument_restart and str(workflow_version) != "32":
+            raise FukamiruError("Argument restart requires manuscript generator V32")
 
         source_row = self.connection.execute(
-            "SELECT * FROM runs WHERE id=?", (source_run_id,)
+            "SELECT id,workflow_name,workflow_version,status,project_id,input_json "
+            "FROM runs WHERE id=?", (source_run_id,),
         ).fetchone()
         if source_row is None:
             raise FukamiruError(f"Unknown run: {source_run_id}")
@@ -825,6 +987,8 @@ class RunRepository:
             )
 
         required_fields = (
+            ("research_question", "claims", "propositions", "classifications")
+            if argument_restart else (
             "research_question",
             "claims",
             "argument_nodes",
@@ -832,6 +996,7 @@ class RunRepository:
             "manuscript_structure_plan",
             "annotation_citation_evidence",
             "reference_entries",
+            )
         )
         missing = [key for key in required_fields if not selected_context.get(key)]
         if missing:
@@ -883,6 +1048,12 @@ class RunRepository:
             "v26_block_verification_records",
             "v26_coherence_report",
         }
+        if argument_restart:
+            downstream_fields.update({
+                "argument_nodes", "argument_edges", "claim_scopes", "defense_obligations",
+                "hypotheses", "discourse_nodes", "discourse_edges", "manuscript_structure_plan",
+                "concept_fit_reports_v32", "concept_fit_final_audit_v32",
+            })
         restart_context = {
             key: value for key, value in selected_context.items() if key not in downstream_fields
         }
@@ -908,6 +1079,15 @@ class RunRepository:
                 },
             }
         )
+        if argument_restart:
+            restart_context["_join_generations"] = {
+                "plan_manuscript_structure": str(uuid.uuid4()),
+            }
+            from fukamiru.review_feedback import apply_feedback, feedback_context
+
+            submitted = feedback_context(self.connection, source_run_id)
+            if submitted["answers"] or submitted["overall_comments"]:
+                restart_context = apply_feedback(restart_context, submitted)
         created = self.create(
             workflow_name=(
                 MANUSCRIPT_GENERATOR if str(workflow_version) in {"31", "32"} else "authoring"
@@ -918,6 +1098,20 @@ class RunRepository:
             inputs=restart_context,
             resource_lane=resource_lane,
         )
+        if argument_restart:
+            preservation_node_id = str(uuid.uuid4())
+            self.connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,resource_lane) "
+                "VALUES (?,?,?,1,'queued',?,'ingestion_cpu')",
+                (preservation_node_id, created.run_id, "build_source_preservation_map",
+                 _json_dump(restart_context)),
+            )
+            EventRepository(self.connection).append(
+                created.run_id, "node.queued", object_type="node_run",
+                object_id=preservation_node_id,
+                payload={"node_id": "build_source_preservation_map", "attempt": 1,
+                         "reason": "rebuild_source_preservation_for_argument_restart"},
+            )
         event_payload = dict(restart_context["authoring_restart_lineage"])
         event_payload["derived_run_id"] = created.run_id
         event = EventRepository(self.connection).append(
@@ -1117,6 +1311,147 @@ class RunRepository:
             snapshot_run_id=str(snapshot_row["run_id"]),
             snapshot_node_run_id=str(snapshot_row["node_run_id"]),
             plan_id=plan_id,
+        )
+
+    def create_authoring_render_restart(
+        self, source_run_id: str, *, workflow_version: str,
+    ) -> AuthoringContractRestartCreated:
+        return self._create_authoring_tail_restart(
+            source_run_id, workflow_version=workflow_version, boundary="render_evidence_footnotes",
+        )
+
+    def create_authoring_audit_restart(
+        self, source_run_id: str, *, workflow_version: str,
+    ) -> AuthoringContractRestartCreated:
+        return self._create_authoring_tail_restart(
+            source_run_id, workflow_version=workflow_version, boundary="audit_final_findings",
+        )
+
+    def _create_authoring_tail_restart(
+        self, source_run_id: str, *, workflow_version: str, boundary: str,
+    ) -> AuthoringContractRestartCreated:
+        """Fork a validated saved boundary without mutating source history."""
+        from fukamiru.documents.canonical_html import CanonicalHTMLValidator
+
+        source = self.connection.execute(
+            "SELECT * FROM runs WHERE id=?", (source_run_id,),
+        ).fetchone()
+        if source is None:
+            raise FukamiruError(f"Unknown run: {source_run_id}")
+        if (not is_manuscript_generator_workflow(source["workflow_name"])
+                or str(source["workflow_version"]) != "32" or str(workflow_version) != "32"):
+            raise FukamiruError("Render restart requires a V32 manuscript-generator Run")
+        if source["status"] in {"queued", "running"}:
+            raise FukamiruError("Cannot branch an active authoring run")
+        if not source["project_id"]:
+            raise FukamiruError("Authoring render restart requires a project")
+        assert boundary in {"render_evidence_footnotes", "audit_final_findings"}
+        row = self.connection.execute(
+            "SELECT id,input_json,status FROM node_runs "
+            "WHERE run_id=? AND node_id=? ORDER BY rowid DESC LIMIT 1",
+            (source_run_id, boundary),
+        ).fetchone()
+        if row is None or row["status"] != "completed":
+            raise FukamiruError(
+                f"Authoring restart requires the latest successful {boundary} input"
+            )
+        try:
+            context = PayloadStore(self.connection).unpack(json.loads(row["input_json"] or "{}"))
+        except (TypeError, ValueError) as exc:
+            raise FukamiruError("Authoring render restart snapshot is unreadable") from exc
+        required = (
+            "plan_id", "plan_revision", "source_document_id", "source_revision_id", "document_id",
+            "research_problem", "section_contracts", "draft_sections", "proposed_html",
+        )
+        if not isinstance(context, dict) or any(not context.get(key) for key in required):
+            raise FukamiruError("Authoring render restart snapshot is incomplete")
+        CanonicalHTMLValidator().assert_valid(str(context["proposed_html"]))
+        target = self.connection.execute(
+            "SELECT project_id,current_revision_id FROM content_documents WHERE id=?",
+            (str(context["document_id"]),),
+        ).fetchone()
+        if (target is None or target["project_id"] != source["project_id"]
+                or target["current_revision_id"] is not None):
+            raise FukamiruError("Render restart requires an unapproved target paper")
+        downstream = {
+            "reference_rendered_html_v26", "final_quality_sha256", "frozen_candidate_v26",
+            "final_bibliography_entries", "reference_render_report", "reference_quality_gate",
+            "reference_usage_reconciliation", "citation_event_drafts",
+            "evidence_use_citation_links",
+            "prose_redraft_report_v31", "prose_redraft_inference_ledger_v31",
+            "paragraph_transition_report_v32",
+            "heading_revision_report_v31", "verification_notes_routed_v32", "final_finding_audit",
+            "concept_fit_final_audit_v32",
+            "final_discourse_review", "final_discourse_sha256_v26", "completion_gate",
+            "v26_final_judgement", "authoring_result_status", "human_revision_decision",
+            "human_revision_items", "human_approval_required", "human_review",
+            "rendered_structure_v26", "submission_package", "authoring_submission_revalidation",
+            "authoring_review_id", "final_artifact_id", "final_path", "review_report_path",
+            "review_report_artifact_id", "target_revision_id", "completion_status",
+            "conditional_success", "authoring_reviewable_non_ready_persisted",
+        }
+        prefixes = ("authoring_proposal_", "footnoted_", "footnote_",
+                    "evidence_footnote_", "submission_validation_")
+        if boundary == "audit_final_findings":
+            from fukamiru.revisions.prose_redraft import digest, validate_handoff
+
+            sha = digest(context["proposed_html"])
+            if (context.get("frozen_candidate_v26") or {}).get("html_sha256") != sha:
+                raise FukamiruError("Audit restart requires the unchanged frozen HTML")
+            if not context.get("prose_redraft_report_v31"):
+                raise FukamiruError("Audit restart requires a validated prose handoff")
+            validate_handoff(context)
+            raw_output = json.loads(source["output_json"] or "{}")
+            latest = PayloadStore(self.connection).unpack({
+                key: raw_output[key] for key in ("proposed_html",) if key in raw_output
+            })
+            if latest.get("proposed_html") != context["proposed_html"]:
+                raise FukamiruError("Audit restart snapshot differs from the saved final HTML")
+            downstream = {
+                "final_finding_audit", "concept_fit_final_audit_v32", "v26_final_judgement",
+                "completion_gate", "authoring_result_status", "submission_package",
+                "authoring_submission_revalidation", "authoring_review_id", "final_artifact_id",
+                "final_path", "review_report_path", "review_report_artifact_id",
+                "target_revision_id", "completion_status", "conditional_success",
+                "authoring_reviewable_non_ready_persisted",
+            }
+            prefixes = ("authoring_proposal_", "submission_validation_")
+        removed = {key: value for key, value in context.items()
+                   if key in downstream or key.startswith(prefixes)}
+        restarted = {key: value for key, value in context.items() if key not in removed}
+        restarted.pop("authoring_run_id", None)
+        restarted["project_id"] = str(source["project_id"])
+        restarted["authoring_workflow_policy"] = authoring_policy(workflow_version)
+        lineage = {
+            "policy": (
+                "authoring-frozen-final-audit-restart-v1" if boundary == "audit_final_findings"
+                else "authoring-pre-footnote-boundary-restart-v1"
+            ),
+            "source_run_id": source_run_id, "snapshot_node_run_id": str(row["id"]),
+            "restart_node_id": boundary, "source_plan_id": context["plan_id"],
+            "source_html_sha256": hashlib.sha256(context["proposed_html"].encode()).hexdigest(),
+            "discarded_result_hashes": {
+                key: hashlib.sha256(_json_dump(value).encode()).hexdigest()
+                for key, value in removed.items()
+            },
+        }
+        restarted["authoring_tail_restart_lineage"] = lineage
+        if boundary == "render_evidence_footnotes":
+            restarted["authoring_render_restart_lineage"] = lineage
+        created = self.create(
+            workflow_name=MANUSCRIPT_GENERATOR, workflow_version="32",
+            entry_node=boundary, project_id=str(source["project_id"]),
+            inputs=PayloadStore(self.connection).pack(restarted), resource_lane="ingestion_cpu",
+        )
+        event = EventRepository(self.connection).append(
+            created.run_id, ("run.authoring_audit_restart_created"
+                             if boundary == "audit_final_findings"
+                             else "run.authoring_render_restart_created"),
+            object_type="run", object_id=created.run_id, payload=lineage,
+        )
+        return AuthoringContractRestartCreated(
+            run_id=created.run_id, event_id=event.event_id, snapshot_run_id=source_run_id,
+            snapshot_node_run_id=str(row["id"]), plan_id=str(context["plan_id"]),
         )
 
     def get(self, run_id: str) -> dict[str, Any]:
@@ -2721,9 +3056,48 @@ class RunRepository:
                 )
                 if cancelled_rag_context_recovery:
                     error = previous_node_error
+            v32_verification_routing_recovery = False
+            if (workflow_version == "32" and str(node["node_id"]) == "build_argument_graph"
+                    and run["status"] == node["status"] == "cancelled"
+                    and error.get("type") == "RunCancelled"
+                    and error.get("message") == "Cancelled by operator"
+                    and prior_replays <= 2
+                    and set(prior_replay_policies) <= {
+                        "authoring-v32-bounded-concept-repair-v2",
+                        "authoring-v32-basis-identity-review-v1",
+                    }):
+                route_repair = self.connection.execute(
+                    "SELECT operation_name,result_json FROM llm_result_checkpoints "
+                    "WHERE run_id=? AND node_id='build_argument_graph' "
+                    "AND stage='repair_concept_fit_v32' AND status='accepted' "
+                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (run_id,),
+                ).fetchone()
+                if route_repair:
+                    operation = str(route_repair["operation_name"])
+                    base = re.sub(r":concept-repair(?::2)?$", "", operation)
+                    route_native = self.connection.execute(
+                        "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                        "AND node_id='build_argument_graph' AND stage='argument_graph_v31' "
+                        "AND operation_name=? AND status='accepted'", (run_id, base),
+                    ).fetchone()
+                    earlier = self.connection.execute(
+                        "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                        "AND node_id='build_argument_graph' AND stage='repair_concept_fit_v32' "
+                        "AND operation_name=? AND status='accepted'",
+                        (run_id, base + ":concept-repair"),
+                    ).fetchone() if operation.endswith(":2") else None
+                    if route_native and (not operation.endswith(":2") or earlier):
+                        v32_verification_routing_recovery = (
+                            _v32_verification_routing_is_replayable(
+                                json.loads(route_native["result_json"]),
+                                json.loads(route_repair["result_json"]),
+                                json.loads(earlier["result_json"]) if earlier else None,
+                            )
+                        )
             valid_failed_run = run["status"] == "failed" and bool(failed)
             if not (
                 valid_failed_run
+                or v32_verification_routing_recovery
                 or cancelled_rag_context_recovery
                 or v31_cancelled_self_citation_recovery
                 or v31_cancelled_semantic_audit_reroute
@@ -3446,16 +3820,231 @@ class RunRepository:
                 and isinstance(unpacked, dict)
                 and _v31_missing_draft_source_is_reviewable(error_message, unpacked)
             )
+            v32_internal_evidence_review_recovery = False
+            v32_bounded_concept_repair_recovery = False
+            v32_basis_identity_review_recovery = False
+            v32_field_anchor_review_recovery = False
+            if (workflow_version == "32" and str(node["node_id"]) == "build_argument_graph"
+                    and error.get("type") == "NonRetryableFukamiruError"
+                    and error_message.startswith("Concept review excerpt is not in its field:")
+                    and prior_replay_policies in ([], [
+                        "authoring-v32-bounded-concept-repair-v2",
+                        "authoring-v32-basis-identity-review-v1",
+                        "authoring-v32-verification-routing-recovery-v1",
+                    ])):
+                anchor_native = self.connection.execute(
+                    "SELECT operation_name,result_json FROM llm_result_checkpoints WHERE run_id=? "
+                    "AND node_id='build_argument_graph' AND stage='argument_graph_v31' "
+                    "AND status='accepted' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                anchor_report = self.connection.execute(
+                    "SELECT path FROM run_artifacts WHERE run_id=? AND node_run_id=? "
+                    "AND artifact_type='authoring_concept_fit_report' "
+                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (run_id, node["id"]),
+                ).fetchone()
+                if anchor_native and anchor_report:
+                    from fukamiru.authoring import concept_fit
+
+                    try:
+                        native = json.loads(anchor_native["result_json"])
+                        report_path = Path(anchor_report["path"])
+                        archived = json.loads(report_path.read_text("utf-8"))
+                        candidate_sha = concept_fit.digest(native)
+                        expected_name = concept_fit.digest([
+                            str(anchor_native["operation_name"]) + ":concept-review:invalid:1",
+                            candidate_sha,
+                        ])[:24]
+                        if (report_path.stem.split("-")[0] == expected_name
+                                and archived.get("status") == "invalid_review"
+                                and archived.get("stage") == "argument_graph_v31"
+                                and archived.get("error") == error_message
+                                and archived.get("candidate_sha256") == candidate_sha):
+                            v32_field_anchor_review_recovery = (
+                                _v32_field_anchor_review_is_replayable(
+                                    error_message, native, archived["initial_review"], unpacked,
+                                )
+                            )
+                    except (OSError, ValueError, TypeError, KeyError):
+                        pass
+            if (workflow_version == "32" and str(node["node_id"]) == "build_argument_graph"
+                    and error.get("type") == "NonRetryableFukamiruError"
+                    and error_message == "Concept review invented a basis ID"
+                    and prior_replay_policies in (
+                        [], ["authoring-v32-bounded-concept-repair-v2"],
+                    )):
+                basis_report = self.connection.execute(
+                    "SELECT path FROM run_artifacts WHERE run_id=? AND node_run_id=? "
+                    "AND artifact_type='authoring_concept_fit_report' "
+                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (run_id, node["id"]),
+                ).fetchone()
+                basis_native = self.connection.execute(
+                    "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                    "AND node_id='build_argument_graph' AND stage='argument_graph_v31' "
+                    "AND status='accepted' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                if basis_report and basis_native:
+                    from fukamiru.authoring import concept_fit
+
+                    try:
+                        archived = json.loads(Path(basis_report["path"]).read_text("utf-8"))
+                        native = json.loads(str(basis_native["result_json"]))
+                        if (archived.get("status") == "invalid_review"
+                                and archived.get("stage") == "argument_graph_v31"
+                                and archived.get("error") == error_message
+                                and archived.get("candidate_sha256") == concept_fit.digest(native)):
+                            v32_basis_identity_review_recovery = (
+                                _v32_basis_identity_review_is_replayable(
+                                    error_message, native, archived["initial_review"], unpacked,
+                                )
+                            )
+                    except (OSError, ValueError, TypeError, KeyError):
+                        pass
+            if (workflow_version == "32" and str(node["node_id"]) == "build_argument_graph"
+                    and error.get("type") == "NonRetryableFukamiruError"
+                    and prior_replays == 0
+                    and error_message.startswith("Concept repair remains unresolved: ")):
+                saved_graph = self.connection.execute(
+                    "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                    "AND node_id='build_argument_graph' AND stage='argument_graph_v31' "
+                    "AND status='accepted' ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                    (run_id,),
+                ).fetchone()
+                if saved_graph is not None:
+                    v32_internal_evidence_review_recovery = (
+                        _v32_internal_evidence_review_is_repairable(
+                            error_message, json.loads(str(saved_graph["result_json"])),
+                        )
+                    )
+                latest_review = self.connection.execute(
+                    "SELECT operation_name,result_json FROM llm_result_checkpoints "
+                    "WHERE run_id=? AND node_id='build_argument_graph' "
+                    "AND stage='review_concept_fit_v32' AND status='accepted' "
+                    "ORDER BY created_at DESC,rowid DESC LIMIT 1", (run_id,),
+                ).fetchone()
+                if (latest_review is not None and str(latest_review["operation_name"]).endswith(
+                    ":concept-recheck"
+                )):
+                    base = str(latest_review["operation_name"]).removesuffix(":concept-recheck")
+                    native = self.connection.execute(
+                        "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                        "AND stage='argument_graph_v31' AND operation_name=? "
+                        "AND status='accepted'", (run_id, base),
+                    ).fetchone()
+                    repair = self.connection.execute(
+                        "SELECT result_json FROM llm_result_checkpoints WHERE run_id=? "
+                        "AND stage='repair_concept_fit_v32' AND operation_name=? "
+                        "AND status='accepted'", (run_id, base + ":concept-repair"),
+                    ).fetchone()
+                    second_repair = self.connection.execute(
+                        "SELECT 1 FROM llm_result_checkpoints WHERE run_id=? "
+                        "AND stage='repair_concept_fit_v32' AND operation_name=? "
+                        "AND status='accepted'", (run_id, base + ":concept-repair:2"),
+                    ).fetchone()
+                    if native is not None and repair is not None and second_repair is None:
+                        v32_bounded_concept_repair_recovery = (
+                            _v32_bounded_concept_repair_is_replayable(
+                                error_message, json.loads(str(native["result_json"])),
+                                json.loads(str(repair["result_json"])),
+                                json.loads(str(latest_review["result_json"])),
+                            )
+                        )
+            prose_basis_diagnostic_recovery = False
+            if (
+                workflow_version == "32"
+                and str(node["node_id"]) == "redraft_japanese_paragraphs"
+                and error.get("type") == "NonRetryableFukamiruError"
+                and error_message == "Concept review invented a basis ID"
+                and prior_replays == 0 and isinstance(unpacked, dict)
+            ):
+                from fukamiru.authoring import concept_fit as fit
+
+                native_row = self.connection.execute(
+                    "SELECT operation_name,result_json FROM llm_result_checkpoints "
+                    "WHERE run_id=? AND node_id='redraft_japanese_paragraphs' "
+                    "AND stage='japanese_paragraph_redraft_v31' AND status='accepted' "
+                    "ORDER BY updated_at DESC,rowid DESC LIMIT 1", (run_id,),
+                ).fetchone()
+                if native_row is not None:
+                    operation = str(native_row["operation_name"])
+                    match = re.fullmatch(r"japanese_paragraph_redraft_(\d+)_(\d+)", operation)
+                    work_sections = dict(unpacked.get("japanese_redrafting_work") or {}).get(
+                        "sections", [],
+                    )
+                    if match and int(match[1]) < len(work_sections):
+                        section = work_sections[int(match[1])]
+                        candidate = json.loads(str(native_row["result_json"]))
+                        payload = {
+                            **section["base"],
+                            "locked_section_contracts": unpacked.get("section_contracts") or [],
+                        }
+                        key = fit.digest([operation + ":concept-review:invalid:1",
+                                          fit.digest(candidate)])[:24]
+                        for artifact in self.connection.execute(
+                            "SELECT path FROM run_artifacts WHERE run_id=? AND node_run_id=? "
+                            "AND artifact_type='authoring_concept_fit_report' "
+                            "ORDER BY created_at DESC,rowid DESC", (run_id, node["id"]),
+                        ):
+                            path = Path(str(artifact["path"]))
+                            if not path.name.startswith(key):
+                                continue
+                            try:
+                                report = json.loads(path.read_text(encoding="utf-8"))
+                                prose_basis_diagnostic_recovery = bool(
+                                    report.get("candidate_sha256") == fit.digest(candidate)
+                                    and report.get("stage") == "japanese_paragraph_redraft_v31"
+                                    and report.get("status") == "invalid_review"
+                                    and report.get("error") == error_message
+                                    and _v32_prose_basis_typo_is_replayable(
+                                        candidate, report["initial_review"], unpacked, payload,
+                                    )
+                                )
+                            except (OSError, ValueError, TypeError, KeyError):
+                                pass
+                            break
+            audit_claim_target_recovery = False
+            if (
+                workflow_version in {"31", "32"}
+                and str(node["node_id"]) == "classify_audit_findings"
+                and error.get("type") == "ValidationError"
+                and "finding references a section outside the audit target" in error_message
+                and prior_replays == 0
+                and isinstance(unpacked, dict)
+            ):
+                contracts = unpacked.get("section_contracts") or []
+                known = {str(item.get("section_id") or "") for item in contracts}
+                raw_findings = unpacked.get("audit_findings") or []
+                try:
+                    localized = [
+                        target for finding in raw_findings
+                        for target in localize_audit_finding(
+                            finding, section_contracts=contracts,
+                            draft_sections=unpacked.get("draft_sections") or [],
+                        )
+                    ]
+                    audit_claim_target_recovery = bool(
+                        raw_findings and any(
+                            item.get("object_type") in {"claim", "sentence"}
+                            and str(item.get("object_id") or "") not in known
+                            for item in raw_findings
+                        ) and all(
+                            str(item.get("section_id") or item.get("object_id") or "")
+                            .rsplit(":", 1)[-1] in known
+                            for item in localized
+                        )
+                    )
+                except (ValueError, TypeError, KeyError):
+                    audit_claim_target_recovery = False
             pending_nodes = [
                 item
                 for item in nodes
                 if item["status"] not in {"completed", "failed"}
                 and not (
-                    (
-                        cancelled_rag_context_recovery
-                        or v31_cancelled_self_citation_recovery
-                        or v31_cancelled_semantic_audit_reroute
-                    )
+                    (cancelled_rag_context_recovery
+                     or v32_verification_routing_recovery
+                     or v31_cancelled_self_citation_recovery
+                     or v31_cancelled_semantic_audit_reroute)
                     and item["id"] == node["id"]
                 )
             ]
@@ -3532,6 +4121,13 @@ class RunRepository:
                     or v31_discourse_synthesis_phase_failure
                     or v31_section_contract_identity_recovery
                     or v31_missing_draft_source_review
+                    or v32_internal_evidence_review_recovery
+                    or v32_bounded_concept_repair_recovery
+                    or v32_basis_identity_review_recovery
+                    or v32_verification_routing_recovery
+                    or v32_field_anchor_review_recovery
+                    or audit_claim_target_recovery
+                    or prose_basis_diagnostic_recovery
                 )
                 or not isinstance(unpacked, dict)
                 or (
@@ -3590,7 +4186,16 @@ class RunRepository:
                     and not v31_discourse_synthesis_phase_failure
                     and not v31_section_contract_identity_recovery
                     and not v31_missing_draft_source_review
-                    and not _v31_fixed_source_lineage_is_repairable(error_message, unpacked)
+                    and not v32_internal_evidence_review_recovery
+                    and not v32_bounded_concept_repair_recovery
+                    and not v32_basis_identity_review_recovery
+                    and not v32_verification_routing_recovery
+                    and not v32_field_anchor_review_recovery
+                    and not audit_claim_target_recovery
+                    and not prose_basis_diagnostic_recovery
+                    and not _v31_fixed_source_lineage_is_repairable(
+                        error_message, unpacked
+                    )
                 )
             ):
                 raise FukamiruError("Failed authoring node has no replayable input")
@@ -3783,6 +4388,9 @@ class RunRepository:
             )
             if prior_replays >= 1 and not (
                 schema_recovery
+                or v32_basis_identity_review_recovery
+                or v32_verification_routing_recovery
+                or v32_field_anchor_review_recovery
                 or coverage_recovery
                 or index_derivation_recovery
                 or proposal_policy_recovery
@@ -3819,7 +4427,21 @@ class RunRepository:
                 or v31_repair_transport_failure
             ):
                 raise FukamiruError("Failed authoring node already used its manual replay")
-            if v31_audit_join_dispatch_recovery:
+            if prose_basis_diagnostic_recovery:
+                replay_policy = "authoring-v32-prose-basis-diagnostics-v1"
+            elif audit_claim_target_recovery:
+                replay_policy = "authoring-audit-object-section-recovery-v1"
+            elif v32_field_anchor_review_recovery:
+                replay_policy = "authoring-v32-field-anchor-review-v1"
+            elif v32_verification_routing_recovery:
+                replay_policy = "authoring-v32-verification-routing-recovery-v1"
+            elif v32_basis_identity_review_recovery:
+                replay_policy = "authoring-v32-basis-identity-review-v1"
+            elif v32_bounded_concept_repair_recovery:
+                replay_policy = "authoring-v32-bounded-concept-repair-v2"
+            elif v32_internal_evidence_review_recovery:
+                replay_policy = "authoring-v32-internal-evidence-role-review-v1"
+            elif v31_audit_join_dispatch_recovery:
                 replay_policy = "authoring-v31-audit-join-dispatch-recovery-v1"
             elif v31_audit_join_classification_recovery:
                 replay_policy = "authoring-v31-audit-join-classification-recovery-v1"
@@ -3911,9 +4533,17 @@ class RunRepository:
                 "v31_cancelled_semantic_audit_reroute": (v31_cancelled_semantic_audit_reroute),
                 "v31_audit_join_classification_recovery": (v31_audit_join_classification_recovery),
                 "v31_audit_join_dispatch_recovery": v31_audit_join_dispatch_recovery,
-                "v31_repair_source_retirement_recovery": (v31_repair_source_retirement_recovery),
-                "v31_cancelled_rag_context_recovery": (v31_cancelled_rag_context_recovery),
-                "v31_structure_aware_draft_recovery": (v31_structure_aware_draft_recovery),
+                "audit_claim_target_recovery": audit_claim_target_recovery,
+                "prose_basis_diagnostic_recovery": prose_basis_diagnostic_recovery,
+                "v31_repair_source_retirement_recovery": (
+                    v31_repair_source_retirement_recovery
+                ),
+                "v31_cancelled_rag_context_recovery": (
+                    v31_cancelled_rag_context_recovery
+                ),
+                "v31_structure_aware_draft_recovery": (
+                    v31_structure_aware_draft_recovery
+                ),
                 "v31_repair_handoff_recovery": v31_repair_handoff_failure,
                 "v31_repair_transport_recovery": v31_repair_transport_failure,
                 "v31_required_citation_contract_recovery": (
@@ -6192,6 +6822,104 @@ class RunRepository:
                 "attempt": attempt,
                 "status": "queued",
             }
+        except Exception:
+            self.connection.rollback()
+            raise
+
+    def resume_interrupted_corpus_ingestion(
+        self, run_id: str, batch_id: str, *, expected_node_run_id: str,
+    ) -> dict[str, Any]:
+        """Resume an explicitly repaired, stopped V2 batch in a new attempt.
+
+        The caller must stop workers first. Keep the old input, timestamps and
+        lease as history; reject live leases and any ambiguous active scope.
+        """
+        now = utc_now()
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            run = self.connection.execute(
+                "SELECT * FROM runs WHERE id=?", (run_id,),
+            ).fetchone()
+            batch = self.connection.execute(
+                "SELECT * FROM corpus_sync_batches WHERE id=?", (batch_id,),
+            ).fetchone()
+            active = self.connection.execute(
+                "SELECT * FROM node_runs WHERE run_id=? "
+                "AND status IN ('queued','running','waiting_human')", (run_id,),
+            ).fetchall()
+            if (run is None or run["workflow_name"] != "corpus_sync"
+                    or run["workflow_version"] != "2" or run["status"] != "running"
+                    or batch is None or batch["run_id"] != run_id
+                    or batch["status"] != "ingesting" or len(active) != 1):
+                raise FukamiruError("Run is not an interrupted Corpus ingestion")
+            node = active[0]
+            if (node["id"] != expected_node_run_id or node["node_id"] != "ingest_ready_sources"
+                    or node["status"] != "running" or not node["lease_expires_at"]
+                    or node["lease_expires_at"] > now):
+                raise FukamiruError("Expected stopped Corpus ingestion lease does not match")
+            counts = {row["status"]: row["n"] for row in self.connection.execute(
+                "SELECT status,COUNT(*) n FROM corpus_sync_items "
+                "WHERE batch_id=? AND skip_reason IS NULL GROUP BY status", (batch_id,),
+            )}
+            if (set(counts) - {"discovered", "ready", "reused"} or not counts
+                    or sum(counts.values()) != batch["discovered_count"]):
+                raise FukamiruError("Effective Corpus scope has not been repaired")
+            pending = self.connection.execute(
+                "SELECT 1 FROM pdf_ocr_jobs j JOIN corpus_sync_items i ON i.id=j.corpus_item_id "
+                "WHERE j.run_id=? AND i.skip_reason IS NOT NULL "
+                "AND j.status IN ('queued','processing','needs_language') LIMIT 1", (run_id,),
+            ).fetchone()
+            if pending:
+                raise FukamiruError("Excluded Corpus sources still have pending OCR jobs")
+            inputs = PayloadStore(self.connection).unpack(json.loads(node["input_json"]))
+            if inputs.get("corpus_batch_id") != batch_id:
+                raise FukamiruError("Corpus node input and batch differ")
+            excluded = self.connection.execute(
+                "SELECT COUNT(*) FROM corpus_sync_items WHERE batch_id=? "
+                "AND skip_reason IS NOT NULL", (batch_id,),
+            ).fetchone()[0]
+            inputs.update(discovered_count=batch["discovered_count"], existing_count=excluded,
+                          scanned_count=batch["discovered_count"] + excluded,
+                          ready_count=counts.get("ready", 0), reused_count=counts.get("reused", 0),
+                          failed_count=0, ocr_required_count=0)
+            attempt = self.connection.execute(
+                "SELECT MAX(attempt)+1 FROM node_runs WHERE run_id=? "
+                "AND node_id='ingest_ready_sources'", (run_id,),
+            ).fetchone()[0]
+            replacement = str(uuid.uuid4())
+            self.connection.execute(
+                "UPDATE node_runs SET status='cancelled',completed_at=?,error_json=? "
+                "WHERE id=? AND status='running'",
+                (now, _json_dump({"type": "InterruptedCorpusIngestion",
+                                  "message": "Superseded after explicit batch repair",
+                                  "replacement_node_run_id": replacement}), node["id"]),
+            )
+            self.connection.execute(
+                "INSERT INTO node_runs(id,run_id,node_id,attempt,status,input_json,resource_lane) "
+                "VALUES (?,?,'ingest_ready_sources',?,'queued',?,?)",
+                (replacement, run_id, attempt,
+                 _json_dump(PayloadStore(self.connection).pack(inputs)), node["resource_lane"]),
+            )
+            self.connection.execute("UPDATE runs SET status='queued' WHERE id=?", (run_id,))
+            for event_type, object_id, payload in [
+                ("corpus.ingestion.interrupted_attempt_superseded", node["id"], {
+                    "replacement_node_run_id": replacement, "batch_id": batch_id,
+                    "previous_status": node["status"],
+                }),
+                ("node.queued", replacement, {
+                    "node_id": "ingest_ready_sources", "attempt": attempt,
+                    "previous_node_run_id": node["id"], "resource_lane": node["resource_lane"],
+                    "discovered_count": batch["discovered_count"], "existing_count": excluded,
+                }),
+            ]:
+                self.connection.execute(
+                    "INSERT INTO event_log(run_id,event_type,object_type,object_id,"
+                    "payload_json,created_at) VALUES (?,?,'node_run',?,?,?)",
+                    (run_id, event_type, object_id, _json_dump(payload), now),
+                )
+            self.connection.commit()
+            return {"run_id": run_id, "node_run_id": replacement,
+                    "node_id": "ingest_ready_sources", "attempt": attempt, "status": "queued"}
         except Exception:
             self.connection.rollback()
             raise

@@ -18,6 +18,12 @@ NOTE = (
     "資料登録→抽出→OCR監査→構造化→Chunk生成→FTS→意味索引へ進めます。"
     "原稿生成はこのRunを待たず、完了済みOCRは再実行しません。PDFハッシュで登録を一意にします。"
 )
+ADDITIONS_NOTE = (
+    " 追加取り込みはSHA-256が一致する取り込み済み資料をalready_ingestedとして除外し、"
+    "追加・内容変更分だけを対象件数に含めます。既存Itemと失敗履歴は保持します。"
+    "除外資料の未完了OCRジョブは履歴を残して取り消し、不要な言語待ちを解除します。"
+    "PDF解析版の更新や派生HTMLの欠落だけでは保存済み本文・OCR・Chunkを再生成しません。"
+)
 
 
 def main() -> None:
@@ -26,9 +32,29 @@ def main() -> None:
     handoff.pop("paragraph_argument_move_catalog")
     source["researchSourceHandoff"] = handoff
     source["singleWorkflow"]["researchSourceHandoff"] = handoff
+    source["corpusSourceScope"]["existing_sources"] = "skip_ready_canonical_sha256"
+    source["corpusSourceScope"]["parser_upgrade"] = "preserve_canonical_content"
+    source["indexProgressDisplay"].update(
+        run_details="numeric_phase_progress",
+        unknown_total="show_actual_count_without_percentage",
+        numeric_units="preserve_reported_unit",
+    )
+    for node in source["nodes"]:
+        if node["id"] == "register_sync_batch":
+            node["description"] = "SHA-256で取込済み資料を除外し、追加分の対象件数を確定"
+            node["boundary"] = (
+                "全Itemを登録した後、同じSHA-256の取込済み資料をalready_ingestedとして記録し、"
+                "対象件数から除外します。元Item・状態・エラー履歴は保持します。"
+            )
+        if node["id"] == "locate_and_hash_source":
+            node["boundary"] = (
+                "同じSHA-256を排他し、保存済み本文を再利用します。"
+                "PDF解析版の更新や派生HTML欠落による自動再処理は行いません。"
+            )
     for workflow in (source, source["singleWorkflow"]):
         note = workflow["meta"]["note"].split(" 原稿生成で表示可能な暗号化PDF", 1)[0]
-        workflow["meta"]["note"] = note + NOTE
+        note = note.split(" 追加取り込みはSHA-256", 1)[0]
+        workflow["meta"]["note"] = note + ADDITIONS_NOTE + NOTE
     document = REPORT.read_text(encoding="utf-8")
     pattern = r'(<script id="workflow-data" type="application/json">)(.*?)(</script>)'
     match = re.search(pattern, document, flags=re.S)
@@ -37,6 +63,9 @@ def main() -> None:
     data = json.loads(match[2])
     data["workflows"]["corpus"]["researchSourceHandoff"] = handoff
     data["workflows"]["corpus"]["meta"] = source["meta"]
+    data["workflows"]["corpus"]["nodes"] = source["nodes"]
+    data["workflows"]["corpus"]["corpusSourceScope"] = source["corpusSourceScope"]
+    data["workflows"]["corpus"]["indexProgressDisplay"] = source["indexProgressDisplay"]
     data["workflows"]["single"] = source["singleWorkflow"]
     encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
     encoded = encoded.replace("</", "<\\/")

@@ -145,6 +145,14 @@ PROOFREADING_PATCH_NODE_IDS = frozenset(
     }
 )
 
+V32_LOCAL_PROOFREADING_NAMES_JA = {
+    "extract_proofreading_sentences": "校正する文IDと原文ハッシュを確定",
+    "generate_proofreading_candidates": "文IDに対応する局所修正を生成",
+    "preprocess_proofreading_candidates": "局所修正の原文対応と文体を検査",
+    "rank_proofreading_candidates": "原文と局所修正候補を比較して選択",
+    "publish_proofreading_shadow": "IDを保って検証済み局所修正を反映",
+}
+
 
 def workflow_node_metadata(
     definition: WorkflowDefinition | None, node_id: str
@@ -156,10 +164,45 @@ def workflow_node_metadata(
         if definition
         else None
     )
+    contextual_names = {
+        "prepare": "原文IDと節の校正文脈を固定",
+        "propose": "LLM-jp 33B highで診断と局所修正を提案",
+        "review": "LLM-jp 33B highで原文と候補の採否を確認",
+        "apply": "原文照合を通過した修正だけ反映",
+        "reconcile": "LLM-jp 33B highで校正後の対応情報と出典述語を確認",
+    }
+    contextual = (
+        node.handler.removeprefix("authoring.llmjp33b_")
+        if node and node.handler.startswith("authoring.llmjp33b_")
+        else ""
+    )
+    adopted_names = {
+        "prepare_sections": "節ごとの校正入力とID・引用要素を固定",
+        "correct_sections_once": "各節1回で日本語を校正し管理対象のHF Jobを停止",
+        "validate_sections": "原文を機械照合しSolで内容変更・文の破損だけを確認",
+        "diagnose": "全文を一度読み不自然な連語・語法を診断",
+        "suggest": "指摘箇所だけの理由と局所修正案を提示",
+        "verify": "指摘の解消を一度だけ確認し別案を探索しない",
+        "prepare": "引用要素を保持して本文スロットを固定",
+        "propose": "LLM-jp 33B highの語感で日本語案を作成",
+        "review": "採用案の誤字・引用前後の破損を修復・再確認",
+        "apply": "Lunaで既存表記規定を適用し本文案を保持",
+        "reconcile": "実際の根拠利用から引用・脚注・IDの対応を維持",
+        "finish": "採用本文を保持し確認不足の留保を人間確認へ移送",
+    }
+    adopted = (node.handler.removeprefix("authoring.llmjp_adopt_")
+               if node and node.handler.startswith("authoring.llmjp_adopt_") else "")
     return {
         "node_id": node_id,
         "title": node.title if node else node_id.replace("_", " "),
         "function_name_ja": (
+            adopted_names.get(adopted) or contextual_names.get(contextual)
+        ) or (
+            V32_LOCAL_PROOFREADING_NAMES_JA.get(node_id)
+            if definition
+            and definition.name == "manuscript_generator" and definition.version == "32"
+            else None
+        ) or (
             V31_NODE_FUNCTION_NAMES_JA.get(node_id)
             if definition and definition.version in {"31", "32"}
             else None

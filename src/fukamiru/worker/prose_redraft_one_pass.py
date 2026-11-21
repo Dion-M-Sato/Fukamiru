@@ -2,7 +2,8 @@
 
 The model sees the source prose and its section evidence once.  It does not
 receive a post-generation audit or a second opportunity to rewrite the same
-section; unresolved editorial questions stay visible in the report.
+section. V32 additionally reviews every paragraph boundary after verification
+notes are removed, with at most one opening-sentence repair and independent recheck.
 """
 
 from __future__ import annotations
@@ -471,17 +472,18 @@ def run(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
         ]
         if not target_ids:
             continue
+        reader_text = prose.reader_paragraph_text(revised)
         payload = {
             "output_language": "ja",
             "section_id": section_id,
             "paragraphs": [
                 {"paragraph_id": paragraph_id,
-                 "visible_text": reviewed_inventory[paragraph_id]["visible_text"]}
+                 "visible_text": reader_text[paragraph_id]}
                 for paragraph_id in target_ids
             ],
             "candidate_context_paragraphs": [
                 {"paragraph_id": paragraph_id,
-                 "visible_text": reviewed_inventory[paragraph_id]["visible_text"]}
+                 "visible_text": reader_text[paragraph_id]}
                 for paragraph_id in section_ids
             ],
         }
@@ -543,6 +545,31 @@ def run(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
                 raise NonRetryableFukamiruError(
                     "V32 cited prose rollback left an unaligned footnote marker"
                 )
+    verification_items = []
+    transition_report = None
+    transition_items = []
+    if str(claimed.workflow_version) == "32":
+        from fukamiru.authoring.verification_notes import route
+
+        # Run after every rollback: restoring an old paragraph must not restore
+        # its editorial caveats. Extraction failure stops instead of publishing
+        # the unreviewed source as a successful cleanup.
+        revised, verification_items = route(worker, claimed, context, revised, protected)
+        if sections:
+            from fukamiru.authoring.paragraph_transitions import run as review_transitions
+
+            revised, transition_report, transition_items = review_transitions(
+                worker, claimed, context, revised, protected
+            )
+            transition_path = output_root / "authoring.paragraph-transitions.report.json"
+            transition_report["report_path"] = str(transition_path)
+            transition_path.write_text(
+                json.dumps(transition_report, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            worker._register_artifact(
+                claimed, transition_path, "authoring_paragraph_transitions_report",
+                "段落間の中心語と接続表現の点検", media_type="application/json",
+            )
     if prose.manifest(original, protected) != prose.manifest(revised, protected):
         raise NonRetryableFukamiruError("Prose redraft changed locked DOM content")
 
@@ -551,6 +578,10 @@ def run(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
         WorkerRunner._authoring_reader_facing_sections_from_html(revised)
     )
     after = {item["paragraph_id"]: item for item in prose.inventory(revised, protected)}
+    for item in paragraphs:
+        after.setdefault(item["paragraph_id"], {
+            **item, "text_slots": [""] * len(item["text_slots"]), "visible_text": "",
+        })
     before_by_id = {item["paragraph_id"]: item for item in paragraphs}
     for outcome in outcomes:
         before = before_by_id[outcome["paragraph_id"]]
@@ -614,10 +645,12 @@ def run(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
     )
     report = {
         "policy": "v31-rendered-dom-prose-redraft-single-pass-v1",
+        "verification_notes_routed": verification_items,
+        "paragraph_transitions": transition_report,
         **validation,
         "status": (
             "skipped_non_japanese" if not sections else
-            "completed_with_review" if unresolved else "completed"
+            "completed_with_review" if unresolved or transition_items else "completed"
         ),
         "quality_assessment": (
             "citation_reader_review_unavailable" if any(
@@ -682,20 +715,23 @@ def run(worker: Any, claimed: Any, context: dict[str, Any]) -> dict[str, Any]:
         "reference_rendered_html_v26": revised,
         "final_quality_sha256": prose.digest(revised),
         "prose_redraft_report_v31": report,
+        "paragraph_transition_report_v32": transition_report,
         "prose_redraft_inference_ledger_v31": [],
         "manuscript_surface_quality_gate": {
             "gate": "read-only-after-rendered-prose-redraft",
             "passed": True,
-            "review_required": bool(static_findings or scaffold_findings),
+            "review_required": bool(static_findings or scaffold_findings or transition_items),
             "remaining_issue_blocks": static_findings,
             "remaining_issue_count": sum(
                 len(item.get("issues") or []) for item in static_findings
             ),
             "target_html_sha256": prose.digest(revised),
         },
-        "human_review_items": [
-            *list(context.get("human_review_items") or []), *human_items
-        ],
+        "human_review_items": list({item["review_item_id"]: item for item in [
+            *list(context.get("human_review_items") or []), *human_items, *verification_items,
+            *transition_items,
+        ]}.values()),
+        "verification_notes_routed_v32": verification_items,
         "required_user_information": [
             *list(context.get("required_user_information") or []),
             *[{

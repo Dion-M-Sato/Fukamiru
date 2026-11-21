@@ -23,6 +23,7 @@ Fukamiruのライセンスは、第三者ソフトウェア・辞書・モデル
 | UniDic Lite | 日本語辞書 | UniDicの辞書ライセンスとパッケージの条件を参照 — <https://github.com/polm/unidic-lite> |
 | GiNZA / ja_ginza | 日本語解析 | MIT等。利用モデル・辞書の条件も参照 — <https://github.com/megagonlabs/ginza> |
 | Mistral Python SDK | OCRサービス接続 | SDKのLICENSEを参照 — <https://github.com/mistralai/client-python> |
+| Hugging Face Hub SDK / CLI | 任意のHF Jobs校正・認証 | Apache-2.0 — <https://github.com/huggingface/huggingface_hub/blob/main/LICENSE> |
 
 ## 外部ツール・モデル
 
@@ -33,8 +34,10 @@ Fukamiruのライセンスは、第三者ソフトウェア・辞書・モデル
 | llama.cpp | ローカル推論 | MIT — <https://github.com/ggml-org/llama.cpp> |
 | NDLOCR-Lite | 日本語OCR | 国立国会図書館、CC BY 4.0。依存ライブラリとモデルには別条件あり — <https://github.com/ndl-lab/ndlocr-lite> |
 | BGE-M3等のモデル | 埋め込み・推論 | 各モデルのモデルカード・ライセンスを参照。重みは同梱しない |
+| LLM-jp-4.1 33B thinking GGUF | 日本語校正 | Apache-2.0。固定revision・hashはソースに記載。重みは同梱しない — <https://huggingface.co/llm-jp/llm-jp-4.1-33b-thinking-gguf> |
 
 開発用のpytest・pytest-cov・pytest-xdist・Ruff・httpx・Hatchlingなどにも各配布物のライセンスが適用されます。
+UIの独立ブラウザ検証には[Playwright](https://github.com/microsoft/playwright)（Apache-2.0）を使用します。ブラウザ本体は同梱しません。
 外部API・検索サービスの利用条件と、取得した資料の権利はソフトウェアのライセンスとは別です。
 
 商用ライセンスの提供対象は原作者が権利を持つ部分です。PyMuPDF / MuPDF等の第三者コンポーネントに必要な別ライセンスを含むものではありません。

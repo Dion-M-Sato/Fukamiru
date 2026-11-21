@@ -304,7 +304,7 @@ export function progressUnitLabel(progress, activeNodes = []) {
   if (progress?.kind === "translation_batches" && phase === "repair_translation") {
     return "翻訳準拠修復バッチ";
   }
-  return "翻訳バッチ";
+  return progress?.kind === "translation_batches" ? "翻訳バッチ" : "処理";
 }
 
 const PATCH_STAGE_LABELS = {

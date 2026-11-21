@@ -47,6 +47,7 @@ from fukamiru.authoring.evidence_contracts import (
     draft_source_use_constraints,
     draft_support_anchor_problems,
     evidence_use_identity_hash,
+    localize_audit_finding,
     lock_fixed_assets,
     project_argument_evidence_sources,
     refresh_draft_evidence_identity,
@@ -543,6 +544,7 @@ class WorkerRunner:
         gpu_mutex: GpuMutex | None = None,
         llm_jp: LlamaServerAdapter | None = None,
         llm_jp_base: LlamaServerAdapter | None = None,
+        llm_jp_proofreading: LlamaServerAdapter | None = None,
         gaperon: LlamaServerAdapter | None = None,
     ) -> None:
         self.settings = settings
@@ -555,6 +557,7 @@ class WorkerRunner:
         self.gpu_mutex = gpu_mutex or GpuMutex()
         self.llm_jp = llm_jp
         self.llm_jp_base = llm_jp_base
+        self.llm_jp_proofreading = llm_jp_proofreading
         self.gaperon = gaperon
         self.authoring_adapter = authoring_adapter or CodexAuthoringAdapter(settings)
         self.semantic_index = semantic_index or FaissSemanticIndex(
@@ -609,6 +612,7 @@ class WorkerRunner:
             for index in range(self.settings.worker.ingestion_cpu_max_concurrency)
         }
         self.handlers: dict[str, Handler] = {
+            **self._contextual_proofreading_handlers(),
             "research.register_source": self._research_register_source,
             "research.publish_index": self._research_publish_index,
             "ingestion.locate_source": self._ingestion_locate,
@@ -902,6 +906,9 @@ class WorkerRunner:
     def start(self) -> None:
         if self.running:
             return
+        monitor = getattr(self.llm_jp_proofreading, "start_monitor", None)
+        if monitor:
+            monitor()
         self._recover_orphaned_nodes()
         self._next_recovery_check = time.monotonic() + self._recovery_interval()
         self._stop.clear()
@@ -948,6 +955,9 @@ class WorkerRunner:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
+        cleanup = getattr(self.llm_jp_proofreading, "stop_managed_jobs", None)
+        if cleanup:
+            cleanup()
         for thread in self._threads.values():
             thread.join(timeout)
         with self._lane_lock:
@@ -1005,7 +1015,9 @@ class WorkerRunner:
                 status="running",
                 claimed=claimed,
             )
-            workflow = self._workflow_for(claimed.workflow_name, claimed.workflow_version)
+            workflow = self._workflow_for(
+                claimed.workflow_name, claimed.workflow_version, run_id=claimed.run_id
+            )
             node = next(item for item in workflow.nodes if item.id == claimed.node_id)
             handler = self.handlers[node.handler]
             handler_inputs = claimed.inputs
@@ -2013,7 +2025,41 @@ class WorkerRunner:
                     },
                 )
 
-    def _workflow_for(self, name: str, version: str) -> WorkflowDefinition:
+    def _contextual_proofreading_handlers(self) -> dict[str, Handler]:
+        from fukamiru.worker import proofreading_adoption as adoption
+        from fukamiru.worker import proofreading_context as contextual
+        from fukamiru.worker import proofreading_scoped as scoped
+        from fukamiru.worker import proofreading_section_once as section_once
+
+        def wrap(fn: Any) -> Handler:
+            def handle(claimed: ClaimedNode, context: dict[str, Any]) -> HandlerResult:
+                return HandlerResult(fn(self, claimed, context))
+            return handle
+
+        return {
+            **{"authoring.llmjp33b_" + operation: wrap(getattr(contextual, operation))
+               for operation in ("prepare", "propose", "review", "apply", "reconcile")},
+            **{"authoring.llmjp_adopt_" + operation: wrap(getattr(adoption, operation))
+               for operation in ("apply", "reconcile", "finish")},
+            **{"authoring.llmjp_adopt_" + operation: wrap(getattr(scoped, operation))
+               for operation in ("diagnose", "suggest", "verify")},
+            **{"authoring.llmjp_adopt_" + operation: wrap(getattr(section_once, operation))
+               for operation in ("prepare_sections", "correct_sections_once", "validate_sections")},
+        }
+
+    def _workflow_for(
+        self, name: str, version: str, *, run_id: str | None = None
+    ) -> WorkflowDefinition:
+        if name == "manuscript_generator" and version == "32" and run_id:
+            from fukamiru.workflow.templates import authoring_workflow
+
+            with self.databases.state.connect() as connection:
+                row = connection.execute(
+                    "SELECT input_json FROM runs WHERE id=?", (run_id,)
+                ).fetchone()
+            if row is not None:
+                profile = json.loads(row[0]).get("japanese_proofreading_profile", "local_v32")
+                return authoring_workflow(version="32", proofreading_profile=profile)
         workflow = self.workflow_versions.get((name, version))
         if workflow is None:
             raise FukamiruError(f"Workflow definition is unavailable: {name} version {version}")
@@ -2816,6 +2862,7 @@ class WorkerRunner:
             workflow = self._workflow_for(
                 str(run_definition["workflow_name"]),
                 str(run_definition["workflow_version"]),
+                run_id=str(review["run_id"]),
             )
             if review["status"] == "open" and node["status"] != "waiting_human":
                 connection.rollback()
@@ -6037,6 +6084,22 @@ class WorkerRunner:
         """Apply deterministic ID/count contracts before a result becomes reusable."""
 
         canonical_stage = describe_authoring_request(stage, payload).canonical_stage
+        if canonical_stage == "review_concept_fit_v32":
+            from fukamiru.authoring.concept_fit import validate_review
+
+            try:
+                validate_review(payload, result)
+            except NonRetryableFukamiruError as exc:
+                exc.concept_review_result = result
+                raise
+        if canonical_stage == "repair_concept_fit_v32":
+            from fukamiru.authoring.concept_fit import validate_repairs
+
+            validate_repairs(payload, result)
+        if canonical_stage == "review_paragraph_transitions_v32":
+            from fukamiru.authoring.paragraph_transitions import validate_result
+
+            result = validate_result(payload, result)
         if canonical_stage in {
             "diagnose_body_prose_v31",
             "extract_paragraph_meaning_v31",
@@ -6280,7 +6343,8 @@ class WorkerRunner:
             stage,
             payload,
             retrieval_context,
-            model=str(getattr(self.authoring_adapter, "model", "gpt-6-luna")),
+            model=(None if isinstance(self.authoring_adapter, CodexAuthoringAdapter)
+                   else str(getattr(self.authoring_adapter, "model", "gpt-6-luna"))),
         )
         key = build_checkpoint_key(
             run_id=claimed.run_id,
@@ -6339,10 +6403,73 @@ class WorkerRunner:
         checkpoint: bool = True,
         repair_prose_format: bool = True,
     ) -> dict[str, Any]:
+        if context.get("japanese_proofreading_profile") == "llmjp33b_adopt":
+            from fukamiru.revisions.proofreading_adoption import EXPRESSION_POLICY
+
+            if stage in {"draft_rewrite", "draft", "draft_v31", "draft_introduction_v31",
+                         "draft_body_v31", "draft_conclusion_v31", "polish_prose", "polish_v31",
+                         "compose_body_prose_v31"}:
+                payload = {**payload, "japanese_expression_policy": EXPRESSION_POLICY}
+        result = self._authoring_invoke_raw(
+            claimed, stage=stage, context=context, payload=payload,
+            operation_name=operation_name, retrieval_context=retrieval_context,
+            checkpoint_variant=checkpoint_variant, checkpoint=checkpoint,
+            repair_prose_format=repair_prose_format,
+        )
+        from fukamiru.authoring.concept_fit import GENERATION_STAGES, guard
+
+        canonical = CodexAuthoringAdapter.execution_contract(stage)["canonical_stage"]
+        if str(getattr(claimed, "workflow_version", "")) == "32" and canonical in GENERATION_STAGES:
+            result = guard(
+                self, claimed, stage=canonical, context=context, payload=payload,
+                candidate=result, operation=operation_name, retrieval_context=retrieval_context,
+            )
+            CodexAuthoringAdapter.validate_result(stage, result)
+            self._authoring_validate_checkpoint_result(stage, payload, result)
+        return result
+
+    def _authoring_load_concept_review_checkpoint(
+        self, claimed: ClaimedNode, **kwargs: Any,
+    ) -> dict[str, Any] | None:
+        try:
+            return self._authoring_invoke_raw(
+                claimed, stage="review_concept_fit_v32", checkpoint_only=True, **kwargs,
+            )
+        except LookupError:
+            return None
+
+    def _authoring_invoke_raw(
+        self,
+        claimed: ClaimedNode,
+        *,
+        stage: str,
+        context: dict[str, Any],
+        payload: dict[str, Any],
+        operation_name: str,
+        retrieval_context: str = "",
+        checkpoint_variant: str = "normal",
+        checkpoint: bool = True,
+        repair_prose_format: bool = True,
+        checkpoint_only: bool = False,
+    ) -> dict[str, Any]:
         from fukamiru.review_feedback import feedback_context
 
         with self.databases.state.connect() as connection:
             human_feedback = feedback_context(connection, claimed.run_id)
+        inherited = dict(context.get("human_question_feedback") or {})
+        if inherited:
+            human_feedback = {
+                **inherited, **human_feedback,
+                "answers": list({
+                    str(row.get("key") or row.get("question_id") or _json(row)): row
+                    for row in [*inherited.get("answers", []), *human_feedback["answers"]]
+                }.values()),
+                "overall_comments": list({
+                    str(row.get("review_id") or _json(row)): row
+                    for row in [*inherited.get("overall_comments", []),
+                                *human_feedback["overall_comments"]]
+                }.values()),
+            }
         if human_feedback["answers"] or human_feedback["overall_comments"]:
             payload = {**payload, "human_question_feedback": human_feedback}
         request, key = self._authoring_checkpoint_material(
@@ -6395,6 +6522,8 @@ class WorkerRunner:
                             checkpoint_status="hit",
                         )
                         return dict(cached["result"])
+            if checkpoint_only:
+                raise LookupError("No accepted authoring checkpoint for the current request")
             self._authoring_record_checkpoint_status(
                 claimed,
                 operation_name=operation_name,
@@ -6402,6 +6531,8 @@ class WorkerRunner:
                 key=key,
                 checkpoint_status="miss",
             )
+        if checkpoint_only:
+            raise LookupError("No durable authoring checkpoint for the current request")
         if isinstance(self.authoring_adapter, CodexAuthoringAdapter):
             result = self.authoring_adapter.generate(
                 stage,
@@ -7286,8 +7417,7 @@ class WorkerRunner:
         if mixed:
             return (
                 f"{mixed.group(1)}は生活細部の例として挙げられている。"
-                f"{mixed.group(2)}は{mixed.group(3)}際の参照候補だが、"
-                "この作品への適用は未検証である。"
+                f"{mixed.group(2)}は{mixed.group(3)}際の理論的な視角となる。"
             )
         reference = re.fullmatch(
             r"(.+?)はメモ注釈から引き継いだ理論参照候補であり、書誌同定は完了している。"
@@ -7297,8 +7427,7 @@ class WorkerRunner:
         )
         if reference:
             return (
-                f"{reference.group(1)}を理論的な手がかりとして参照する場合、"
-                "個別の作品への適用は未検証である。"
+                f"{reference.group(1)}を理論的な視角として参照する。"
             )
         provenance = dict(node.get("provenance") or {})
         proposition_id = str(node.get("proposition_id") or "")
@@ -10503,14 +10632,20 @@ class WorkerRunner:
         expected_ids = [str(item["candidate_id"]) for item in candidates]
         if len(expected_ids) != len(set(expected_ids)):
             return {candidate_id: "unclear" for candidate_id in expected_ids}
-        result = self._authoring_generate(
-            claimed,
-            "scholarship_attribution_judgment_v31",
-            context,
-            with_retrieval=False,
-            payload={"candidates": candidates},
-            operation_name="authoring_v31_scholarship_attribution_predicates",
-        )
+        if (context.get("japanese_proofreading_profile") == "llmjp33b_high"
+                and claimed.node_id == "reconcile_candidate_context_after_proofreading"):
+            from fukamiru.worker.proofreading_context import judge_attribution
+
+            result = judge_attribution(self, claimed, context, candidates)
+        else:
+            result = self._authoring_generate(
+                claimed,
+                "scholarship_attribution_judgment_v31",
+                context,
+                with_retrieval=False,
+                payload={"candidates": candidates},
+                operation_name="authoring_v31_scholarship_attribution_predicates",
+            )
         raw_judgments = result.get("judgments")
         if not isinstance(raw_judgments, list):
             return {candidate_id: "unclear" for candidate_id in expected_ids}
@@ -12813,6 +12948,27 @@ class WorkerRunner:
     def _authoring_build_argument_graph(
         self, claimed: ClaimedNode, context: dict[str, Any]
     ) -> HandlerResult:
+        if str(claimed.workflow_version) == "32":
+            context.setdefault("human_review_items", [])
+        if (str(claimed.workflow_version) == "32"
+                and dict(context.get("authoring_restart_lineage") or {}).get("restart_node_id")
+                == "build_argument_graph"):
+            from fukamiru.authoring.concept_fit import guard
+
+            existing = list(context.get("claims") or [])
+            reviewed = guard(
+                self, claimed, stage="claim_tree", context=context,
+                payload={"research_question": context.get("research_question", {}),
+                         "propositions": context.get("propositions", []),
+                         "classifications": context.get("classifications", []),
+                         "claims": existing},
+                candidate={"claims": existing}, operation="restart_claim_concept_review",
+            )["claims"]
+            if {row["id"] for row in existing} != {row["id"] for row in reviewed}:
+                raise NonRetryableFukamiruError(
+                    "Argument restart concept repair changed claim identities"
+                )
+            context = {**context, "claims": reviewed}
         payload = self._authoring_argument_payload(context)
         structure_aware = str(claimed.workflow_version) in {"31", "32"}
         graph_stage = "argument_graph_v31" if structure_aware else "build_argument_graph"
@@ -19331,7 +19487,15 @@ class WorkerRunner:
                 str(evidence_use.get("section_id") or ""), set()
             ).update(str(item) for item in evidence_use.get("source_ids") or [] if str(item))
         findings: list[AuditFindingV31] = []
-        for ordinal, raw in enumerate(context.get("audit_findings") or [], start=1):
+        localized_findings = [
+            candidate
+            for raw in context.get("audit_findings") or [] if isinstance(raw, dict)
+            for candidate in localize_audit_finding(
+                raw, section_contracts=context.get("section_contracts") or [],
+                draft_sections=context.get("draft_sections") or [],
+            )
+        ]
+        for ordinal, raw in enumerate(localized_findings, start=1):
             if not isinstance(raw, dict):
                 continue
             candidate = dict(raw)
@@ -21600,17 +21764,35 @@ class WorkerRunner:
                 },
                 operation_name=f"japanese_diagnosis_{index}",
             )
-            work_sections.append(
-                {
-                    "section_id": str(section["section_id"]),
-                    "base": base,
-                    "diagnoses": diagnosed["diagnoses"],
-                    "attempts": [],
-                    "feedback": [],
-                    "accepted": False,
-                    "candidate": None,
-                }
-            )
+            if str(getattr(claimed, "workflow_version", "")) == "32":
+                from fukamiru.authoring.concept_fit import check_paragraphs, protected_terms
+
+                concept_review = check_paragraphs(
+                    self, claimed, context, paragraphs=section["paragraphs"],
+                    stage="diagnose_japanese_prose",
+                    operation=f"japanese_diagnosis_{index}:concepts",
+                )
+                for row, concepts in zip(
+                    diagnosed["diagnoses"], concept_review["initial_review"]["units"], strict=True
+                ):
+                    row["terms_to_keep"] = list(dict.fromkeys([
+                        *row["terms_to_keep"], *sorted(protected_terms({"units": [concepts]})),
+                    ]))
+                    row["issues"].extend({
+                        "dimension": "vocabulary",
+                        "description": (
+                            f"concept_fit:{item['verdict']}: {item['term']}: {item['reason']}"
+                        ),
+                    } for item in concepts["concepts"] if item["verdict"] != "appropriate")
+            work_sections.append({
+                "section_id": str(section["section_id"]),
+                "base": base,
+                "diagnoses": diagnosed["diagnoses"],
+                "attempts": [],
+                "feedback": [],
+                "accepted": False,
+                "candidate": None,
+            })
         work = {
             "source_sha256": submission_validation.digest(source_html),
             "sections": work_sections,
@@ -21648,19 +21830,40 @@ class WorkerRunner:
             self._raise_if_run_cancelled(claimed, "Japanese redrafting cancelled")
             attempt = len(section["attempts"]) + 1
             base = section["base"]
-            redrafted = self._authoring_invoke(
-                claimed,
-                stage="japanese_paragraph_redraft_v31",
-                context=context,
-                payload={
-                    **base,
-                    "locked_section_contracts": context.get("section_contracts") or [],
-                    "diagnoses": section["diagnoses"],
-                    "previous_feedback": section["feedback"],
-                    "attempt": attempt,
-                },
-                operation_name=f"japanese_paragraph_redraft_{index}_{attempt}",
-            )
+            try:
+                redrafted = self._authoring_invoke(
+                    claimed, stage="japanese_paragraph_redraft_v31", context=context,
+                    payload={**base, "locked_section_contracts": context.get("section_contracts")
+                             or [], "diagnoses": section["diagnoses"],
+                             "previous_feedback": section["feedback"], "attempt": attempt},
+                    operation_name=f"japanese_paragraph_redraft_{index}_{attempt}",
+                )
+            except NonRetryableFukamiruError as exc:
+                prefix = "Concept premise requires upstream claim/contract repair: "
+                if (str(getattr(claimed, "workflow_version", "")) != "32"
+                        or not str(exc).startswith(prefix)):
+                    raise
+                concept_findings = json.loads(str(exc)[len(prefix):])
+                if not isinstance(concept_findings, list) or not concept_findings:
+                    raise
+                # Reject this candidate and return to its upstream paragraph producer.
+                # This uses the existing three-attempt section budget; it never edits
+                # the locked claim/contract or accepts a mere synonym for a bad premise.
+                feedback = [
+                    "Rejected concept premise: " + json.dumps(item, ensure_ascii=False)
+                    + ". Regenerate the affected paragraph from the supplied claim and "
+                    "section contract. Remove the unsupported added premise, preserve "
+                    "necessary concepts, and do not add a verification-status caveat."
+                    for item in concept_findings
+                ]
+                section["candidate"] = None
+                section["feedback"] = feedback
+                section["attempts"].append({
+                    "attempt": attempt, "decisions": [], "feedback": feedback,
+                    "concept_findings": concept_findings,
+                    "status": "upstream_paragraph_repair_required",
+                })
+                continue
             revisions = list(redrafted["revisions"])
             candidate_html, decisions = apply_japanese_redrafting_revisions(
                 current_html,
@@ -21851,9 +22054,27 @@ class WorkerRunner:
                     report["flow_findings"] = reviewed["flow_findings"]
                     feedback = [
                         f"{item['dimension']}: {item['reason']}"
-                        for item in reviewed["ratings"]
-                        if not item["acceptable"]
-                    ] + (list(reviewed["flow_findings"]) if reviewed["flow_needs_revision"] else [])
+                        for item in reviewed["ratings"] if not item["acceptable"]
+                    ] + (
+                        list(reviewed["flow_findings"])
+                        if reviewed["flow_needs_revision"] else []
+                    )
+                    if str(getattr(claimed, "workflow_version", "")) == "32":
+                        from fukamiru.authoring.concept_fit import check_paragraphs
+
+                        concepts = check_paragraphs(
+                            self, claimed, context, paragraphs=candidate["paragraphs"],
+                            stage="review_japanese_sections",
+                            operation=f"japanese_section_review_{index}_{report['attempt']}:concepts",
+                        )
+                        report["concept_fit"] = concepts
+                        feedback.extend(
+                            "concept_fit:" + item["verdict"] + ": " + item["reason"]
+                            for item in concepts["findings"]
+                        )
+                        if any(item["verdict"] in {"unsupported_premise", "unclear"}
+                               for item in concepts["findings"]):
+                            argument_preserved = False
                 section["feedback"] = feedback
                 report["feedback"] = feedback
                 if not feedback:
@@ -34445,6 +34666,7 @@ class WorkerRunner:
         if (
             is_manuscript_generator_workflow(claimed.workflow_name)
             and int(claimed.workflow_version) >= 31
+            and context.get("japanese_proofreading_profile") != "llmjp33b_adopt"
         ):
             draft_sections = [
                 dict(item) for item in context.get("draft_sections") or [] if isinstance(item, dict)
@@ -34579,6 +34801,14 @@ class WorkerRunner:
             for item in context.get("authoring_paragraph_citation_lineage") or []
             if isinstance(item, dict)
         ]
+        actual_use_mapping = (
+            context.get("japanese_proofreading_profile") == "llmjp33b_adopt"
+            and bool(
+                (context.get("proofreading_adoption") or {}).get("citation_realization", {}).get(
+                    "evidence_uses_available"
+                )
+            )
+        )
         if (
             is_manuscript_generator_workflow(claimed.workflow_name)
             and int(claimed.workflow_version) >= 31
@@ -34590,6 +34820,7 @@ class WorkerRunner:
             is_manuscript_generator_workflow(claimed.workflow_name)
             and int(claimed.workflow_version) >= 30
             and not citation_lineage
+            and not actual_use_mapping
         ):
             # Older V30 checkpoints predate the dedicated lineage field. Their
             # realized paragraph records carry the same stable block/evidence
@@ -35362,6 +35593,40 @@ class WorkerRunner:
         frozen = str(dict(context.get("frozen_candidate_v26") or {}).get("html_sha256") or "")
         if frozen != submission_validation.digest(str(context["proposed_html"])):
             raise CoherenceResolutionRequired("v26.findings_candidate_hash_mismatch")
+        if (str(getattr(claimed, "workflow_version", "")) == "32"
+                and context.get("prose_redraft_report_v31")):
+            from fukamiru.authoring.concept_fit import check_paragraphs
+
+            document = str(context["proposed_html"])
+            reader_text = prose_redraft.reader_paragraph_text(document)
+            paragraphs = [
+                {**row, "visible_text": reader_text[row["paragraph_id"]]}
+                for row in prose_redraft.inventory(document)
+            ]
+            reports = [check_paragraphs(
+                self, claimed, context, paragraphs=paragraphs[start:start + 8],
+                stage="audit_final_findings", operation=f"final_concepts_{start // 8}",
+            ) for start in range(0, len(paragraphs), 8)]
+            problems = [item for report in reports for item in report["findings"]]
+            items = [{
+                "review_item_id": "concept-fit:" + submission_validation.digest(item)[:20],
+                "section_id": "manuscript", "sentence_id": item["paragraph_id"],
+                "category": "concept_fit", "reason": item["term"] + ": " + item["reason"],
+                "source_ids": item["basis_ids"], "blocks_render": False, "status": "open",
+                "recommended_check": (
+                    "主張・論証・節契約の概念を確認してください。"
+                    if item["verdict"] in {"unsupported_premise", "unclear"}
+                    else "意味と必要な専門語を保ち、文脈に合う表現へ直してください。"
+                ),
+            } for item in problems]
+            context = {
+                **context,
+                "concept_fit_final_audit_v32": {
+                    "source_sha256": frozen, "status": "requires_review" if problems else "passed",
+                    "paragraph_count": len(paragraphs), "reports": reports, "findings": problems,
+                },
+                "human_review_items": [*list(context.get("human_review_items") or []), *items],
+            }
         if (
             str(getattr(claimed, "workflow_version", "")) in {"31", "32"}
             and context.get("prose_redraft_report_v31") is not None
@@ -35394,6 +35659,9 @@ class WorkerRunner:
         html = str(context["proposed_html"])
         frozen = dict(context.get("frozen_candidate_v26") or {})
         sha = submission_validation.digest(html)
+        concept_audit = context.get("concept_fit_final_audit_v32")
+        if concept_audit and concept_audit.get("source_sha256") != sha:
+            raise CoherenceResolutionRequired("v32.concept_audit_candidate_hash_mismatch")
         if frozen.get("html_sha256") != sha:
             raise CoherenceResolutionRequired("v26.final_candidate_hash_mismatch")
         structure = final_worker_v26._structure(

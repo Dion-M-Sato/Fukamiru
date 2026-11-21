@@ -1055,6 +1055,58 @@ def infer_disposition(raw: dict[str, Any]) -> FindingDisposition:
     return "human_review"
 
 
+def localize_audit_finding(
+    raw: dict[str, Any],
+    *,
+    section_contracts: list[dict[str, Any]],
+    draft_sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Resolve object targets through actual section membership, without dropping findings."""
+    known = [str(item["section_id"]) for item in section_contracts if item.get("section_id")]
+    object_id = str(raw.get("object_id") or "")
+    explicit = str(raw.get("section_id") or "")
+    if not object_id and not explicit:
+        return [dict(raw)]
+    target = explicit or object_id
+    normalized = target.rsplit(":", 1)[-1]
+    if target in known or normalized in known:
+        return [{**raw, "section_id": target if target in known else normalized}]
+    object_type = str(raw.get("object_type") or "")
+    if explicit or object_type not in {"claim", "sentence"}:
+        return [dict(raw)]  # AuditBundle still rejects unknown section references.
+    matches: set[str] = set()
+    for section in [*section_contracts, *draft_sections]:
+        section_id = str(section.get("section_id") or "")
+        if section_id not in known:
+            continue
+        ids = list(section.get("claim_ids") or []) if object_type == "claim" else []
+        for paragraph in section.get("paragraphs") or []:
+            ids.extend(paragraph.get("claim_ids" if object_type == "claim" else "sentence_ids")
+                       or [])
+        if any(str(item).rsplit(":", 1)[-1] == normalized for item in ids):
+            matches.add(section_id)
+    if not matches:
+        raise ValueError(f"Audit {object_type} target has no section: {object_id}")
+    localized = []
+    for section_id in known:
+        if section_id not in matches:
+            continue
+        candidate = {**raw, "section_id": section_id}
+        sentence_ids = [
+            str(sentence_id)
+            for section in draft_sections if section.get("section_id") == section_id
+            for paragraph in section.get("paragraphs") or []
+            for sentence_id in paragraph.get("sentence_ids") or []
+        ]
+        candidate["target_ids"] = list(dict.fromkeys([
+            *(raw.get("target_ids") or []), object_id, *sentence_ids,
+        ]))
+        if len(matches) > 1 and (raw.get("finding_id") or raw.get("id")):
+            candidate["finding_id"] = str(raw.get("finding_id") or raw["id"]) + ":" + section_id
+        localized.append(candidate)
+    return localized
+
+
 def adapt_audit_finding(
     raw: dict[str, Any],
     *,
@@ -1099,6 +1151,8 @@ def adapt_audit_finding(
                     for item in sentence_ids_by_section.get(target, [])
                 )
             )
+            known_sentences = set(sentence_ids_by_section.get(section_id or "", []))
+            sentence_targets.extend(target for target in targets if target in known_sentences)
             operations = (
                 RepairOperation(
                     operation="replace",

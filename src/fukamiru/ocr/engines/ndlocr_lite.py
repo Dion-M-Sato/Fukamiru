@@ -35,12 +35,14 @@ class NDLOCRLiteEngine:
             temp = Path(temp_name)
             command = [self.command]
             # The Windows console launcher spawns Python as a grandchild. Calling
-            # its documented module entry point directly saves the launcher and
+            # its CLI entry point directly saves the launcher and
             # makes the OCR process CPU visible to GetProcessTimes.
             if os.name == "nt" and Path(self.command).name.casefold() == "ndlocr-lite.exe":
                 interpreter = Path(self.command).with_name("python.exe")
                 if interpreter.is_file():
-                    command = [str(interpreter), "-m", "ocr"]
+                    # v2's CLI resolves the downloaded model cache. `-m ocr`
+                    # only looks for bundled models, absent from PyPI wheels.
+                    command = [str(interpreter), "-c", "from cli import main; main()"]
             args = [
                 *command,
                 "--sourcepdf",
@@ -50,6 +52,7 @@ class NDLOCRLiteEngine:
                 "--pdf-render-dpi",
                 str(self.pdf_render_dpi),
                 "--json-only",
+                "--no-pdf-page-output",
                 "--enable-tcy",
             ]
             ocr_env = os.environ.copy()

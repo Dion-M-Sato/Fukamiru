@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -159,6 +160,15 @@ def test_local_recovery_caps_pages_caches_results_and_preserves_original(tmp_pat
             academic_research_ocr_pages=1, academic_research_ocr_seconds=10),
         ocr=SimpleNamespace(ndlocr_command=str(tmp_path / "missing")),
     )
+    old_directory = settings.paths.runtime_root / "source_reads" / recovery.digest({
+        "sha256": known["content_sha256"], "pages": [selected["pages"][0]["number"]],
+        "policy": "local-page-ocr-v1", "dpi": 200,
+        "command": settings.ocr.ndlocr_command, "seconds": 10,
+    })
+    old_directory.mkdir(parents=True)
+    (old_directory / "candidates.json").write_text(json.dumps([
+        {"number": selected["pages"][0]["number"], "text": "旧モデルの候補。"},
+    ]), encoding="utf-8")
     first = recovery.recover_pages(known, selected, settings)
     second = recovery.recover_pages(known, selected, settings)
     assert calls == [(1, "ja")]

@@ -66,10 +66,13 @@ macOS・LinuxではPython CLIで起動できます。外部ツール連携を含
 | 旧方式のローカル推敲 | llama.cppの`llama-server`、対応GGUF、各モデルのパス設定。現行33B方式とは別profile |
 | 意味検索・RAG | `.[rag]`、準備済みBGE-M3キャッシュ、FAISS、互換PyTorch。端末のGPU設定は校正用HFとは別 |
 | 日本語解析 | `.[japanese]`：MeCab・UniDic Lite・GiNZA |
-| 日本語OCR | ローカルNDLOCR-Lite。専用インストールスクリプトあり |
+| 日本語OCR | ローカルNDLOCR-Lite 2.0.0。専用インストールスクリプトあり |
 | その他の対応言語のOCR | `.[ocr]`と利用者自身の`MISTRAL_API_KEY`。Mistralへ画像を送信 |
 | 補助Web検索（任意） | 別プロセスのRustXNG v0.30.0 Standard。[接続方法](docs/specification/research-source-handoff.md) |
 | UIの開発・自動検査 | Node.js / npm |
+
+NDLOCR-Liteは[2026-11-24公開のver.2](https://lab.ndl.go.jp/news/2026/2026-11-24/)に対応しています。
+導入スクリプトは2.0.0と公式モデル4個を準備します。更新方法は[セットアップ](docs/setup.md#ndlocr-lite-20への更新)を参照してください。
 
 HFで33B校正する場合、その33Bを端末GPUへ載せる必要はありません。
 この方式では、端末へのllama.cpp・Docker・33Bモデルの導入も不要です。推論環境はHF側で用意します。

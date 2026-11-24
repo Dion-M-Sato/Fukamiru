@@ -45,7 +45,7 @@ def _recover_pages(
     seconds = settings.translation.academic_research_ocr_seconds
     directory = settings.paths.runtime_root / "source_reads" / digest({
         "sha256": known["content_sha256"], "pages": [p["number"] for p in bad],
-        "policy": "local-page-ocr-v1", "dpi": 200,
+        "policy": "local-page-ocr-v2-ndlocr-2.0.0", "dpi": 200,
         "command": settings.ocr.ndlocr_command, "seconds": seconds,
     })
     directory.mkdir(parents=True, exist_ok=True)

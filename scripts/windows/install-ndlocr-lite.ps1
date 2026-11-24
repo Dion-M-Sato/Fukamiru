@@ -3,36 +3,32 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Repository = Join-Path $RuntimeRoot "ndlocr-lite"
 $VirtualEnvironment = Join-Path $RuntimeRoot "ndlocr-venv"
 $Python = Join-Path $VirtualEnvironment "Scripts\python.exe"
 $Executable = Join-Path $VirtualEnvironment "Scripts\ndlocr-lite.exe"
 $UvCache = Join-Path $RuntimeRoot "uv-cache"
+# Pin the tested release; do not install a moving upstream branch.
+$Package = "ndlocr-lite==2.0.0"
 
 New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
-
-if (Test-Path (Join-Path $Repository ".git")) {
-    git -C $Repository -c http.sslBackend=schannel pull --ff-only
-} elseif (Test-Path $Repository) {
-    throw "NDLOCR-Lite destination exists but is not a Git repository: $Repository"
-} else {
-    git -c http.sslBackend=schannel clone --depth 1 `
-        "https://github.com/ndl-lab/ndlocr-lite.git" $Repository
-}
 
 $Uv = Get-Command uv -ErrorAction SilentlyContinue
 if ($null -ne $Uv) {
     if (-not (Test-Path $Python)) {
-        & $Uv.Source venv $VirtualEnvironment --cache-dir $UvCache
+        & $Uv.Source venv --python ">=3.11" $VirtualEnvironment --cache-dir $UvCache
+        if ($LASTEXITCODE -ne 0) { throw "NDLOCR-Lite virtual environment creation failed." }
     }
-    & $Uv.Source pip install --system-certs --python $Python $Repository --cache-dir $UvCache
+    & $Uv.Source pip install --system-certs --python $Python --upgrade $Package --cache-dir $UvCache
 } else {
     if (-not (Test-Path $Python)) {
         python -m venv $VirtualEnvironment
+        if ($LASTEXITCODE -ne 0) { throw "NDLOCR-Lite virtual environment creation failed." }
     }
     & $Python -m pip install --upgrade pip
-    & $Python -m pip install $Repository
+    if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
+    & $Python -m pip install --upgrade $Package
 }
+if ($LASTEXITCODE -ne 0) { throw "NDLOCR-Lite package installation failed." }
 
 if (-not (Test-Path $Executable)) {
     throw "NDLOCR-Lite executable was not installed: $Executable"
@@ -44,5 +40,12 @@ if ($LASTEXITCODE -ne 0) {
     throw "NDLOCR-Lite JSON-only compatibility patch failed."
 }
 
+# Download and hash-check v2 models before processing user documents,
+# including network-disabled passage recognition.
+& $Python (Join-Path (Split-Path $PSScriptRoot -Parent) "prepare_ndlocr_models.py")
+if ($LASTEXITCODE -ne 0) { throw "NDLOCR-Lite model preparation failed." }
+
+& $Executable --version
+if ($LASTEXITCODE -ne 0) { throw "NDLOCR-Lite CLI verification failed." }
 Write-Host "NDLOCR-Lite installed: $Executable"
 Write-Host "Set ocr.ndlocr_command in config/local.toml to this path."

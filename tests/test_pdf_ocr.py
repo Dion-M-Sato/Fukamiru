@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 from pypdf import PdfWriter
 from pypdf.generic import (
     DecodedStreamObject,
@@ -248,9 +249,10 @@ class PDFOCRTests(unittest.TestCase):
             return object()
 
         with (
-            patch.dict(os.environ, {}, clear=True),
+            pytest.MonkeyPatch.context() as environment,
             self.assertRaisesRegex(FukamiruError, "MISTRAL_API_KEY"),
         ):
+            environment.delenv("MISTRAL_API_KEY", raising=False)
             MistralOCREngine(client_factory=factory).process(source, "fr")
         self.assertFalse(called)
 
@@ -267,7 +269,8 @@ class PDFOCRTests(unittest.TestCase):
             ]
         )
         client = SimpleNamespace(ocr=SimpleNamespace(process=lambda **_kwargs: response))
-        with patch.dict(os.environ, {"MISTRAL_API_KEY": "test-only"}, clear=True):
+        with pytest.MonkeyPatch.context() as environment:
+            environment.setenv("MISTRAL_API_KEY", "test-only")
             result = MistralOCREngine(client_factory=lambda _key: client).process(source, "fr")
         self.assertEqual(result.pages[0].page_number, 1)
         self.assertEqual(result.pages[0].text, "cœur, œuvre, élève, où, ça, æther")
@@ -307,8 +310,43 @@ class PDFOCRTests(unittest.TestCase):
         self.assertEqual(child.call_count, 1)
         self.assertEqual(child.call_args.kwargs["encoding"], "utf-8")
         self.assertIn("--json-only", child.call_args.args[0])
+        self.assertIn("--no-pdf-page-output", child.call_args.args[0])
         self.assertEqual(result.pages[0].text, "舊字體ゝ。")
         self.assertTrue(result.pages[0].metadata["lines"][0]["isVertical"])
+
+    def test_ndlocr_keeps_all_pdf_pages_including_blank_pages(self) -> None:
+        source = self.root / "multi.pdf"
+        _write_pdf(source)
+        executable = self.root / "ndlocr-lite.exe"
+        interpreter = self.root / "python.exe"
+        interpreter.touch()
+
+        def fake_run(args: list[str], **_kwargs: object) -> MagicMock:
+            output = Path(args[args.index("--output") + 1])
+            (output / "multi.json").write_text(json.dumps({
+                "pdfinfo": {"page_count": 3},
+                "contents": [[{"text": "第一頁"}], [], [{"text": "第三頁"}]],
+            }), encoding="utf-8")
+            process = MagicMock()
+            process.__enter__.return_value = process
+            process.communicate.return_value = ("", "")
+            process.returncode = 0
+            return process
+
+        with (
+            patch("fukamiru.ocr.engines.ndlocr_lite.subprocess.Popen", side_effect=fake_run)
+            as child,
+            patch("fukamiru.ocr.engines.ndlocr_lite._reserve_windows_cpu_for_server"),
+            patch("fukamiru.ocr.engines.ndlocr_lite._windows_process_cpu_seconds"),
+        ):
+            result = NDLOCRLiteEngine(command=str(executable)).process(source, "ja")
+        assert [(page.page_number, page.text) for page in result.pages] == [
+            (1, "第一頁"), (2, ""), (3, "第三頁"),
+        ]
+        if os.name == "nt":
+            assert child.call_args.args[0][:3] == [
+                str(interpreter), "-c", "from cli import main; main()",
+            ]
 
 
 if __name__ == "__main__":

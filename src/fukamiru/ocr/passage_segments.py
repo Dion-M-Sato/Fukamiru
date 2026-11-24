@@ -13,6 +13,19 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+def recognizer_arguments() -> SimpleNamespace:
+    """Use the installed release's model manifest, including its verified cache."""
+    import ocr
+    from model_download import MODELS, get_model_path
+
+    package = Path(ocr.__file__).parent
+    return SimpleNamespace(
+        rec_weights=str(get_model_path(*MODELS["rec_weights"], package / "model")),
+        rec_classes=str(package / "config" / "NDLmoji.yaml"),
+        device="cpu", enable_tcy=False,
+    )
+
+
 def main() -> None:
     def deny(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("Network is disabled in local passage recognition")
@@ -23,17 +36,7 @@ def main() -> None:
     import numpy as np
     from ocr import get_recognizer
 
-    package = Path(sys.executable).parent.parent / "Lib" / "site-packages"
-    # Support the configured NDLOCR command's own package location on Unix too.
-    import ocr
-
-    package = Path(ocr.__file__).parent
-    recognizer = get_recognizer(SimpleNamespace(
-        rec_weights=str(package / "model" /
-                        "parseq-ndl-24x768-100-tiny-153epoch-tegaki3-r8data-202604.onnx"),
-        rec_classes=str(package / "config" / "NDLmoji.yaml"),
-        device="cpu", enable_tcy=False,
-    ))
+    recognizer = get_recognizer(recognizer_arguments())
     manifest = Path(sys.argv[1])
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     for page in payload:

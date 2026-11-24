@@ -125,3 +125,24 @@ The environment used Python 3.13.5 and Node.js 24 on Windows. HTTP test dependen
 emit their deprecation warning. Model replies and external providers are controlled
 fixtures; this release check did not launch paid HF Jobs, send manuscripts to external
 models or certify live GPU/BGE-M3 performance or linguistic quality.
+
+## NDLOCR-Lite 2.0.0 (2026-11-24)
+
+- The Windows installer pins the official PyPI release `ndlocr-lite==2.0.0`, prepares
+  its four default models with upstream SHA-256 verification, applies the JSON-only
+  PDF compatibility patch, and checks the installed CLI version.
+- PDF OCR calls the CLI entry point so downloaded model-cache resolution runs.
+  Multi-page PDFs explicitly produce one aggregate JSON. Partial-page recognition
+  uses the installed model manifest, and its cache policy excludes old-model results.
+- Synthetic regressions cover page order and blank pages, recognized old-form
+  characters, cached model selection, stale passage-cache rejection, and patch
+  execution/idempotence/rejection of unsupported upstream implementations.
+- API-key tests modify only their target environment variable and retain unrelated
+  native environment entries on Windows. Authentication and text assertions remain
+  strict. The focused OCR, passage and Git checkpoint selection passed 30 tests.
+- README and setup instructions describe installation and upgrade requirements.
+  No personal configuration, model files or operational records are distributed.
+- Complete Python suite: 2,342 passed, with no failures, errors or skips (809.70
+  seconds, eight workers). Eight existing HTTP test deprecation warnings were emitted.
+- UI syntax/unit checks: 69 passed. Repository Ruff, Git whitespace checks and the
+  publication guard passed; the guard inspected all 509 distributable source files.

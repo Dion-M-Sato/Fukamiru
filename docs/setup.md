@@ -46,7 +46,7 @@ Windowsで手動実行する場合は `.venv\Scripts\Activate.ps1` で仮想環�
 | ローカル推敲 | `llama-server` とGGUFを準備し、`models.*.path` を設定 |
 | 意味検索 | `python -m pip install -e '.[rag]'`、互換性のあるPyTorch、準備済みモデルキャッシュ |
 | Mistral OCR | `python -m pip install -e '.[ocr]'` と環境変数 `MISTRAL_API_KEY` |
-| 日本語OCR | `scripts/windows/install-ndlocr-lite.ps1` を実行し、表示されたコマンドを `ocr.ndlocr_command` に設定 |
+| 日本語OCR | `scripts/windows/install-ndlocr-lite.ps1` でNDLOCR-Lite 2.0.0を導入し、表示されたコマンドを `ocr.ndlocr_command` に設定 |
 
 意味検索を有効にする場合は、`retrieval.semantic_enabled = true` と、使用するデバイスに対応した `embedding_device`、`require_cuda`、`tokenizer_mode` を設定します。
 端末で使う埋め込み・ローカル推論モデルは実行前に準備してください。
@@ -54,6 +54,23 @@ HF校正用workerはJob起動時に固定モデルとランタイムを取得し
 
 Windowsで追加依存とCUDA用PyTorchを導入する場合は、`install.ps1 -Full` を使えます。対応GPUと十分な保存容量が必要です。
 このオプションにはHF校正用の追加依存・認証は含まれません。
+
+## NDLOCR-Lite 2.0への更新
+
+Python 3.11以上を使用し、リポジトリ直下で次のスクリプトを実行します。
+既存の導入先に再実行すると、検証済みの2.0.0へ更新します。
+
+```powershell
+PowerShell -ExecutionPolicy Bypass -File .\scripts\windows\install-ndlocr-lite.ps1
+```
+
+専用環境へPyPIパッケージを導入し、公式モデル4個の取得・SHA-256確認とCLIのバージョン確認を行います。
+表示された実行ファイルのパスを、利用者の`config/local.toml`の`ocr.ndlocr_command`に設定してください。
+モデルはOCR実行前に準備します。
+
+複数ページPDFは一括JSONとして取り込み、不要な透明PDFの生成を抑止します。
+部分OCRもv2モデルを使用し、更新前の部分OCRキャッシュを再利用しません。
+認識結果の旧字体は保持し、既存の言語別振り分けを継続します。
 
 ## 現行33B校正をHF Jobsで使う
 
